@@ -4,13 +4,14 @@ import {
   AlertTriangle, Settings, Search, Thermometer, Zap, Plus, X, Check,
   Wifi, ShieldCheck, Info, Radar, Music, Radio, Terminal, Send, Cpu as Cable,
   Play, Command, Loader2, ShieldAlert, Camera, Heart, LayoutGrid, Settings2,
-  Clock, Gauge, ChevronRight
+  Clock, Gauge, ChevronRight, ToggleLeft, ToggleRight
 } from 'lucide-react';
 
 const AGENT_PORT = 5001;
 const STORAGE_KEY = 'museum_monitor_stations';
 const SUBNET_KEY = 'museum_monitor_subnet';
 const REFRESH_RATE_KEY = 'museum_monitor_refresh_rate';
+const CONFIG_OPTIONS_KEY = 'museum_monitor_config_options';
 const RESTART_TIMEOUT_MS = 5 * 60 * 1000; 
 
 export default function App() {
@@ -27,6 +28,15 @@ export default function App() {
     return parseInt(localStorage.getItem(REFRESH_RATE_KEY)) || 5000;
   });
 
+  const [configOptions, setConfigOptions] = useState(() => {
+    const saved = localStorage.getItem(CONFIG_OPTIONS_KEY);
+    return saved ? JSON.parse(saved) : {
+      highFreq: true,
+      smoothing: true,
+      autoScreenshot: false
+    };
+  });
+
   const [stations, setStations] = useState([]);
   const [discoveredStations, setDiscoveredStations] = useState([]);
   const [selectedStationId, setSelectedStationId] = useState(null);
@@ -40,9 +50,8 @@ export default function App() {
   const [showManualControl, setShowManualControl] = useState(false);
   const [isPulsing, setIsPulsing] = useState(false); 
 
-  // New Navigation States
   const [showSettingsDropdown, setShowSettingsDropdown] = useState(false);
-  const [activeSettingsPanel, setActiveSettingsPanel] = useState(null); // 'fleet' or 'config'
+  const [activeSettingsPanel, setActiveSettingsPanel] = useState(null); 
 
   const [screenshot, setScreenshot] = useState(null);
   const [loadingScreenshot, setLoadingScreenshot] = useState(false);
@@ -67,7 +76,8 @@ export default function App() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(adoptedIps));
     localStorage.setItem(SUBNET_KEY, scanSubnet);
     localStorage.setItem(REFRESH_RATE_KEY, refreshRate.toString());
-  }, [adoptedIps, scanSubnet, refreshRate]);
+    localStorage.setItem(CONFIG_OPTIONS_KEY, JSON.stringify(configOptions));
+  }, [adoptedIps, scanSubnet, refreshRate, configOptions]);
 
   useEffect(() => {
     setStations(prev => {
@@ -89,6 +99,21 @@ export default function App() {
     });
   }, [adoptedIps]);
 
+  const fetchScreenshot = useCallback(async (ip, silent = false) => {
+    if (!silent) setLoadingScreenshot(true);
+    try {
+      const response = await fetch(`http://${ip}:${AGENT_PORT}/action/screenshot`);
+      const data = await response.json();
+      if (data.image) {
+        setScreenshot(`data:image/jpeg;base64,${data.image}`);
+      }
+    } catch (err) {
+      if (!silent) console.error("Failed to fetch screenshot", err);
+    } finally {
+      if (!silent) setLoadingScreenshot(false);
+    }
+  }, []);
+
   const pollAgents = useCallback(async () => {
     const currentStations = stationsRef.current;
     if (currentStations.length === 0) return;
@@ -97,7 +122,6 @@ export default function App() {
       try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 1500);
-
         const response = await fetch(`http://${station.ip}:${AGENT_PORT}/health`, { 
           signal: controller.signal 
         });
@@ -142,14 +166,12 @@ export default function App() {
           const stationRestarts = restartingApps[r.ip];
           let updated = false;
           const nextRestarts = { ...stationRestarts };
-
           r.apps.forEach(app => {
             if (app.status === 'running' && nextRestarts[app.name]?.status === 'restarting') {
               delete nextRestarts[app.name];
               updated = true;
             }
           });
-
           if (updated) {
             setRestartingApps(prev => {
               const cleaned = { ...prev, [r.ip]: nextRestarts };
@@ -168,18 +190,30 @@ export default function App() {
     setLastUpdate(new Date().toLocaleTimeString());
     setIsPulsing(true);
     setTimeout(() => setIsPulsing(false), 800); 
-  }, [restartingApps]);
+
+    // Handle Auto-Screenshot logic
+    if (configOptions.autoScreenshot && selectedStationId) {
+      const target = results.find(r => r.ip === selectedStationId && r.status === 'online');
+      if (target) {
+        fetchScreenshot(target.ip, true);
+      }
+    }
+  }, [restartingApps, configOptions.autoScreenshot, selectedStationId, fetchScreenshot]);
 
   useEffect(() => {
     const hasActiveRestarts = Object.values(restartingApps).some(station => 
       Object.values(station).some(app => app.status === 'restarting')
     );
-    // Dynamic interval based on config and active operations
-    const intervalTime = hasActiveRestarts ? Math.min(2000, refreshRate) : refreshRate;
+    
+    // High-Freq Polling Implementation
+    const intervalTime = (configOptions.highFreq && hasActiveRestarts) 
+      ? Math.min(2000, refreshRate) 
+      : refreshRate;
+
     pollAgents();
     const interval = setInterval(pollAgents, intervalTime);
     return () => clearInterval(interval);
-  }, [pollAgents, restartingApps, refreshRate]);
+  }, [pollAgents, restartingApps, refreshRate, configOptions.highFreq]);
 
   useEffect(() => {
     const watchdog = setInterval(() => {
@@ -249,23 +283,6 @@ export default function App() {
     if (selectedStationId === ip) setSelectedStationId(null);
   };
 
-  const fetchScreenshot = async (ip) => {
-    setLoadingScreenshot(true);
-    try {
-      const response = await fetch(`http://${ip}:${AGENT_PORT}/action/screenshot`);
-      const data = await response.json();
-      if (data.image) {
-        setScreenshot(`data:image/jpeg;base64,${data.image}`);
-      } else if (data.error) {
-        console.error("Agent error:", data.error);
-      }
-    } catch (err) {
-      console.error("Failed to fetch screenshot", err);
-    } finally {
-      setLoadingScreenshot(false);
-    }
-  };
-
   const selectedStation = useMemo(() => 
     stations.find(s => s.id === selectedStationId), 
     [stations, selectedStationId]
@@ -315,6 +332,10 @@ export default function App() {
     }
   };
 
+  const toggleOption = (key) => {
+    setConfigOptions(prev => ({ ...prev, [key]: !prev[key] }));
+  };
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 p-4 md:p-8 font-sans">
       <header className="flex flex-col md:flex-row justify-between items-center gap-6 mb-10 pb-8 border-b border-slate-800">
@@ -355,7 +376,6 @@ export default function App() {
             />
           </div>
           
-          {/* Settings Dropdown Container */}
           <div className="relative">
             <button 
               onClick={() => setShowSettingsDropdown(!showSettingsDropdown)}
@@ -364,7 +384,6 @@ export default function App() {
               <Settings className={`w-5 h-5 ${showSettingsDropdown ? 'rotate-90' : ''} transition-transform duration-300`} />
             </button>
 
-            { }
             {showSettingsDropdown && (
               <div className="absolute right-0 mt-2 w-64 bg-slate-900 border border-slate-800 rounded-xl shadow-2xl z-[100] overflow-hidden animate-in fade-in zoom-in-95 duration-200">
                 <div className="p-2 space-y-1">
@@ -408,7 +427,7 @@ export default function App() {
         </div>
       </header>
 
-      { }
+      {}
       {discoveredStations.length > 0 && (
         <div className="mb-6 animate-in slide-in-from-top duration-500">
           <div className="bg-blue-600/20 border border-blue-500/50 rounded-xl p-4 flex flex-col md:flex-row items-center justify-between gap-4">
@@ -439,7 +458,6 @@ export default function App() {
         </div>
       )}
 
-      { }
       {activeSettingsPanel === 'fleet' && (
         <div className="mb-6 bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-2xl animate-in fade-in zoom-in duration-200">
           <div className="flex justify-between items-center mb-6">
@@ -534,18 +552,18 @@ export default function App() {
                 <span className="text-xs font-black uppercase tracking-widest">Performance</span>
               </div>
               <div className="space-y-3">
-                 <div className="flex items-center justify-between">
+                 <button onClick={() => toggleOption('highFreq')} className="w-full flex items-center justify-between text-left group">
                     <span className="text-xs text-slate-400">High-Freq Polling (Restarts)</span>
-                    <div className="w-8 h-4 bg-blue-600 rounded-full relative"><div className="absolute right-1 top-1 w-2 h-2 bg-white rounded-full"></div></div>
-                 </div>
-                 <div className="flex items-center justify-between">
+                    {configOptions.highFreq ? <ToggleRight className="text-blue-500" /> : <ToggleLeft className="text-slate-600" />}
+                 </button>
+                 <button onClick={() => toggleOption('smoothing')} className="w-full flex items-center justify-between text-left group">
                     <span className="text-xs text-slate-400">Vitals smoothing</span>
-                    <div className="w-8 h-4 bg-slate-700 rounded-full relative"><div className="absolute left-1 top-1 w-2 h-2 bg-white rounded-full"></div></div>
-                 </div>
-                 <div className="flex items-center justify-between">
+                    {configOptions.smoothing ? <ToggleRight className="text-emerald-500" /> : <ToggleLeft className="text-slate-600" />}
+                 </button>
+                 <button onClick={() => toggleOption('autoScreenshot')} className="w-full flex items-center justify-between text-left group">
                     <span className="text-xs text-slate-400">Auto-Screenshot Previews</span>
-                    <div className="w-8 h-4 bg-slate-700 rounded-full relative"><div className="absolute left-1 top-1 w-2 h-2 bg-white rounded-full"></div></div>
-                 </div>
+                    {configOptions.autoScreenshot ? <ToggleRight className="text-amber-500" /> : <ToggleLeft className="text-slate-600" />}
+                 </button>
               </div>
             </div>
 
@@ -564,7 +582,7 @@ export default function App() {
         </div>
       )}
 
-      {/* Main Grid */}
+      {}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         <div className="lg:col-span-4 space-y-4 h-[calc(100vh-250px)] overflow-y-auto pr-2 custom-scrollbar">
           {filteredStations.map(station => (
@@ -574,6 +592,7 @@ export default function App() {
               vitals={vitals[station.id]}
               isSelected={selectedStationId === station.id}
               onClick={() => setSelectedStationId(station.id)}
+              smoothing={configOptions.smoothing}
             />
           ))}
           {filteredStations.length === 0 && (
@@ -618,10 +637,10 @@ export default function App() {
                   <button 
                     onClick={() => fetchScreenshot(selectedStation.ip)}
                     disabled={loadingScreenshot || selectedStation.status === 'offline'}
-                    className="flex items-center gap-2 px-3 py-2 bg-emerald-600/10 text-emerald-400 border border-emerald-500/20 hover:bg-emerald-600 hover:text-white rounded-lg text-[11px] font-bold uppercase transition-all disabled:opacity-20 shadow-lg shadow-emerald-500/5"
+                    className={`flex items-center gap-2 px-3 py-2 border rounded-lg text-[11px] font-bold uppercase transition-all disabled:opacity-20 shadow-lg ${configOptions.autoScreenshot ? 'bg-amber-600/10 text-amber-400 border-amber-500/20' : 'bg-emerald-600/10 text-emerald-400 border-emerald-500/20 hover:bg-emerald-600 hover:text-white'}`}
                   >
                     {loadingScreenshot ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Camera className="w-3.5 h-3.5" />}
-                    Capture View
+                    {configOptions.autoScreenshot ? 'Auto-Capturing' : 'Capture View'}
                   </button>
                   <button 
                     onClick={() => setShowManualControl(true)}
@@ -643,10 +662,10 @@ export default function App() {
               </div>
 
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <VitalMeter icon={<Cpu />} label="CPU" value={vitals[selectedStation.id]?.cpu} color="blue" />
-                <VitalMeter icon={<Activity />} label="RAM" value={vitals[selectedStation.id]?.ram} color="emerald" />
-                <VitalMeter icon={<Zap />} label="GPU" value={vitals[selectedStation.id]?.gpu} color="purple" />
-                <VitalMeter icon={<Thermometer />} label="TEMP" value={vitals[selectedStation.id]?.temp} unit="°C" color="orange" limit={75} />
+                <VitalMeter icon={<Cpu />} label="CPU" value={vitals[selectedStation.id]?.cpu} color="blue" smoothing={configOptions.smoothing} />
+                <VitalMeter icon={<Activity />} label="RAM" value={vitals[selectedStation.id]?.ram} color="emerald" smoothing={configOptions.smoothing} />
+                <VitalMeter icon={<Zap />} label="GPU" value={vitals[selectedStation.id]?.gpu} color="purple" smoothing={configOptions.smoothing} />
+                <VitalMeter icon={<Thermometer />} label="TEMP" value={vitals[selectedStation.id]?.temp} unit="°C" color="orange" limit={75} smoothing={configOptions.smoothing} />
               </div>
 
               {presets[selectedStation.id]?.length > 0 && (
@@ -728,7 +747,7 @@ export default function App() {
         </div>
       </div>
 
-      {/* Manual Control Modal */}
+      { }
       {showManualControl && selectedStation && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl shadow-2xl animate-in zoom-in duration-200 overflow-hidden">
@@ -922,7 +941,7 @@ export default function App() {
   );
 }
 
-function StationCard({ station, vitals, isSelected, onClick }) {
+function StationCard({ station, vitals, isSelected, onClick, smoothing }) {
   return (
     <div 
       onClick={onClick} 
@@ -944,7 +963,7 @@ function StationCard({ station, vitals, isSelected, onClick }) {
               <span>CPU</span><span>{Math.round(vitals?.cpu || 0)}%</span>
             </div>
             <div className="h-1 w-full bg-slate-800 rounded-full overflow-hidden">
-              <div className="h-full bg-blue-500 transition-all duration-700" style={{ width: `${vitals?.cpu || 0}%` }} />
+              <div className={`h-full bg-blue-500 ${smoothing ? 'transition-all duration-700' : ''}`} style={{ width: `${vitals?.cpu || 0}%` }} />
             </div>
           </div>
           <div className="flex-1 space-y-1">
@@ -952,7 +971,7 @@ function StationCard({ station, vitals, isSelected, onClick }) {
               <span>TEMP</span><span>{Math.round(vitals?.temp || 0)}°C</span>
             </div>
             <div className="h-1 w-full bg-slate-800 rounded-full overflow-hidden">
-              <div className={`h-full transition-all duration-700 ${vitals?.temp > 70 ? 'bg-orange-500' : 'bg-emerald-500'}`} style={{ width: `${Math.min(vitals?.temp || 0, 100)}%` }} />
+              <div className={`h-full ${smoothing ? 'transition-all duration-700' : ''} ${vitals?.temp > 70 ? 'bg-orange-500' : 'bg-emerald-500'}`} style={{ width: `${Math.min(vitals?.temp || 0, 100)}%` }} />
             </div>
           </div>
         </div>
@@ -961,7 +980,7 @@ function StationCard({ station, vitals, isSelected, onClick }) {
   );
 }
 
-function VitalMeter({ icon, label, value = 0, unit = '%', color, limit = 90 }) {
+function VitalMeter({ icon, label, value = 0, unit = '%', color, limit = 90, smoothing }) {
   const isDanger = value > limit;
   const colors = {
     blue: 'text-blue-400 bg-blue-400/5 border-blue-400/20 shadow-blue-400/5',
@@ -979,6 +998,13 @@ function VitalMeter({ icon, label, value = 0, unit = '%', color, limit = 90 }) {
       <div className="flex items-baseline gap-1">
         <span className="text-3xl font-black tabular-nums tracking-tighter">{Math.round(value)}</span>
         <span className="text-xs font-bold opacity-40 uppercase">{unit}</span>
+      </div>
+      {/* Visual smoothing represented by a small bar at the bottom of the meter */}
+      <div className="mt-2 h-1 bg-white/5 rounded-full overflow-hidden">
+         <div 
+          className={`h-full ${smoothing ? 'transition-all duration-700' : ''} bg-current opacity-30`}
+          style={{ width: `${Math.min(value, 100)}%` }}
+         />
       </div>
     </div>
   );
