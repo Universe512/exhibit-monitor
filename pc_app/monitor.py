@@ -28,7 +28,6 @@ except ImportError:
     HAS_TRAY = False
 
 # Forces the CREATE_NO_WINDOW flag onto every subprocess call made by the app or libraries.
-# This prevents flashing CMD windows when checking GPU stats or restarting apps.
 if platform.system() == "Windows":
     CREATE_NO_WINDOW = 0x08000000
     _original_popen = subprocess.Popen
@@ -41,7 +40,6 @@ if platform.system() == "Windows":
     subprocess.Popen = _patched_popen
 
 def hide_console():
-    """Hides the console window if running on Windows."""
     if platform.system() == "Windows":
         whnd = ctypes.windll.kernel32.GetConsoleWindow()
         if whnd != 0:
@@ -205,15 +203,20 @@ def get_screenshot():
             monitor = sct.monitors[1]
             sct_img = sct.grab(monitor)
             
-            # Convert to PIL Image for compression (mss uses BGRA format)
+            # Convert to PIL Image
             img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
             
-            # Resize for faster transmission (half-res for efficiency)
-            img.thumbnail((960, 540), Image.Resampling.LANCZOS)
+            # --- RESOLUTION FIX ---
+            # Set target width (e.g., 1920 for 1080p). 
+            # Commenting out thumbnail() entirely will send the native resolution.
+            target_width = 1600 
+            w_percent = (target_width / float(img.size[0]))
+            h_size = int((float(img.size[1]) * float(w_percent)))
+            img = img.resize((target_width, h_size), Image.Resampling.LANCZOS)
             
-            # Save to buffer as JPEG with 60% quality
+            # Save to buffer as JPEG with 85% quality (much cleaner than 60)
             buffer = BytesIO()
-            img.save(buffer, format="JPEG", quality=60)
+            img.save(buffer, format="JPEG", quality=85, optimize=True)
             img_str = base64.b64encode(buffer.getvalue()).decode()
             
             return jsonify({"image": img_str})
@@ -317,16 +320,12 @@ class MonitorGUI:
         self.root.geometry("600x850")
         self.root.configure(bg="#0f172a")
         
-        # System Tray & Title Bar Icon Integration
         self.root.protocol('WM_DELETE_WINDOW', self.minimize_to_tray)
         self.icon = None
         if HAS_TRAY:
-            # Set Title Bar Icon
             self.app_icon_img = self.create_icon_image(32, 32)
             self.tk_icon = ImageTk.PhotoImage(self.app_icon_img)
             self.root.iconphoto(False, self.tk_icon)
-            
-            # Create Tray Icon
             self.create_tray_icon()
 
         self.last_midi_list = []
@@ -401,10 +400,9 @@ class MonitorGUI:
         self.refresh_presets()
 
     def create_icon_image(self, width, height):
-        """Generates a custom dashboard-style icon."""
         image = Image.new('RGBA', (width, height), (0, 0, 0, 0))
         dc = ImageDraw.Draw(image)
-        s = width / 64  # Scaling factor
+        s = width / 64
         dc.ellipse((4*s, 4*s, 60*s, 60*s), fill=(30, 41, 59), outline=(59, 130, 246), width=max(1, int(4*s)))
         dc.ellipse((20*s, 20*s, 44*s, 44*s), fill=(59, 130, 246))
         dc.line([(16*s, 32*s), (24*s, 32*s), (28*s, 16*s), (36*s, 48*s), (40*s, 32*s), (48*s, 32*s)], fill=(255, 255, 255), width=max(1, int(3*s)))
@@ -532,10 +530,7 @@ def run_flask():
     app.run(host='0.0.0.0', port=5001, debug=False, use_reloader=False)
 
 if __name__ == '__main__':
-    # Start Flask API in a background thread
     threading.Thread(target=run_flask, daemon=True).start()
-    
-    # Start the Tkinter UI
     root = tk.Tk()
     gui = MonitorGUI(root)
     root.mainloop()
