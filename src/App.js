@@ -4,7 +4,8 @@ import {
   AlertTriangle, Settings, Search, Thermometer, Zap, Plus, X, Check,
   Wifi, ShieldCheck, Info, Radar, Music, Radio, Terminal, Send, Cpu as Cable,
   Play, Command, Loader2, ShieldAlert, Camera, Heart, LayoutGrid, Settings2,
-  Clock, Gauge, ChevronRight, ToggleLeft, ToggleRight, Download, Trash2, Save
+  Clock, Gauge, ChevronRight, ToggleLeft, ToggleRight, Download, Trash2, Save,
+  Server, Link as LinkIcon, Link2Off
 } from 'lucide-react';
 
 const AGENT_PORT = 5001;
@@ -57,6 +58,11 @@ export default function App() {
   const [isPulsing, setIsPulsing] = useState(false); 
   const [notification, setNotification] = useState(null);
 
+  // Master Service Status States
+  const [masterLinkStatus, setMasterLinkStatus] = useState('offline'); // online, offline, syncing
+  const [lastMasterSync, setLastMasterSync] = useState(null);
+  const [isMasterPulsing, setIsMasterPulsing] = useState(false);
+
   const [showSettingsDropdown, setShowSettingsDropdown] = useState(false);
   const [activeSettingsPanel, setActiveSettingsPanel] = useState(null); 
 
@@ -81,6 +87,7 @@ export default function App() {
 
   const syncToMaster = useCallback(async (ipsToSync) => {
     if (!masterServiceIp) return;
+    setMasterLinkStatus('syncing');
     try {
       const response = await fetch(`http://${masterServiceIp}:5002/sync`, {
         method: 'POST',
@@ -88,11 +95,38 @@ export default function App() {
         body: JSON.stringify({ ips: ipsToSync })
       });
       if (response.ok) {
-        console.log("Fleet Master synced successfully");
+        setMasterLinkStatus('online');
+        setLastMasterSync(new Date().toLocaleTimeString());
+        setIsMasterPulsing(true);
+        setTimeout(() => setIsMasterPulsing(false), 1000);
+      } else {
+        setMasterLinkStatus('offline');
       }
     } catch (err) {
-      console.warn("Could not sync to Master Service. Service may be offline or IP incorrect.");
+      setMasterLinkStatus('offline');
     }
+  }, [masterServiceIp]);
+
+  // Master health check watchdog
+  useEffect(() => {
+    if (!masterServiceIp) return;
+    
+    const checkMaster = async () => {
+      try {
+        const response = await fetch(`http://${masterServiceIp}:5002/sync`, { method: 'GET' });
+        if (response.ok) {
+          setMasterLinkStatus('online');
+        } else {
+          setMasterLinkStatus('offline');
+        }
+      } catch (err) {
+        setMasterLinkStatus('offline');
+      }
+    };
+
+    checkMaster();
+    const interval = setInterval(checkMaster, 10000); // Check every 10s
+    return () => clearInterval(interval);
   }, [masterServiceIp]);
 
   useEffect(() => {
@@ -102,7 +136,7 @@ export default function App() {
     localStorage.setItem(CONFIG_OPTIONS_KEY, JSON.stringify(configOptions));
     localStorage.setItem(MASTER_IP_KEY, masterServiceIp);
     
-    // Auto-sync whenever the fleet or master IP changes
+    // Auto-sync whenever the fleet changes
     syncToMaster(adoptedIps);
   }, [adoptedIps, scanSubnet, refreshRate, configOptions, masterServiceIp, syncToMaster]);
 
@@ -298,7 +332,6 @@ export default function App() {
     localStorage.setItem(CONFIG_OPTIONS_KEY, JSON.stringify(configOptions));
     localStorage.setItem(MASTER_IP_KEY, masterServiceIp);
     
-    // Trigger explicit sync to Python server
     syncToMaster(adoptedIps);
     showToast("Master Configuration Saved & Synced", "success");
   };
@@ -420,19 +453,48 @@ export default function App() {
           </div>
         </div>
 
-        <div className="hidden lg:flex items-center gap-3 bg-slate-900/50 px-4 py-2 rounded-xl border border-slate-800 shadow-lg">
-          <div className="relative">
-            <Heart 
-              className={`w-5 h-5 transition-all duration-300 ${isPulsing ? 'text-red-500 fill-red-500 scale-125' : 'text-slate-600'}`} 
-            />
-            {isPulsing && (
-              <span className="absolute inset-0 animate-ping rounded-full bg-red-500/20" />
-            )}
-          </div>
-          <div className="flex flex-col">
-            <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest leading-none mb-1 text-nowrap">Fleet Heartbeat</span>
-            <span className="text-xs font-mono text-slate-300 leading-none">{lastUpdate || 'Initializing...'}</span>
-          </div>
+        <div className="flex flex-wrap items-center justify-center gap-4">
+            {/* FLEET HEARTBEAT */}
+            <div className="hidden lg:flex items-center gap-3 bg-slate-900/50 px-4 py-2 rounded-xl border border-slate-800 shadow-lg">
+                <div className="relative">
+                <Heart 
+                    className={`w-5 h-5 transition-all duration-300 ${isPulsing ? 'text-red-500 fill-red-500 scale-125' : 'text-slate-600'}`} 
+                />
+                {isPulsing && (
+                    <span className="absolute inset-0 animate-ping rounded-full bg-red-500/20" />
+                )}
+                </div>
+                <div className="flex flex-col">
+                <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest leading-none mb-1 text-nowrap">Fleet Heartbeat</span>
+                <span className="text-xs font-mono text-slate-300 leading-none">{lastUpdate || 'Initializing...'}</span>
+                </div>
+            </div>
+
+            {/* MASTER SERVICE LINK INDICATOR */}
+            <div className={`hidden lg:flex items-center gap-3 px-4 py-2 rounded-xl border shadow-lg transition-all duration-500 ${
+                masterLinkStatus === 'online' ? 'bg-slate-900/50 border-slate-800' : 'bg-red-500/10 border-red-500/30'
+            }`}>
+                <div className="relative">
+                    {masterLinkStatus === 'online' ? (
+                        <Server className={`w-5 h-5 transition-all duration-300 ${isMasterPulsing ? 'text-emerald-500 scale-110' : 'text-slate-600'}`} />
+                    ) : masterLinkStatus === 'syncing' ? (
+                        <RefreshCw className="w-5 h-5 text-blue-500 animate-spin" />
+                    ) : (
+                        <Link2Off className="w-5 h-5 text-red-500 animate-pulse" />
+                    )}
+                    {masterLinkStatus === 'online' && isMasterPulsing && (
+                        <span className="absolute inset-0 animate-ping rounded-full bg-emerald-500/20" />
+                    )}
+                </div>
+                <div className="flex flex-col">
+                    <span className={`text-[9px] font-black uppercase tracking-widest leading-none mb-1 text-nowrap ${
+                        masterLinkStatus === 'online' ? 'text-slate-500' : 'text-red-400'
+                    }`}>Master Link</span>
+                    <span className={`text-xs font-mono leading-none ${
+                        masterLinkStatus === 'online' ? 'text-slate-300' : 'text-red-500 font-bold'
+                    }`}>{masterLinkStatus === 'online' ? (lastMasterSync || 'Linked') : 'Disconnected'}</span>
+                </div>
+            </div>
         </div>
 
         <div className="flex items-center gap-3 w-full md:w-auto">
@@ -616,7 +678,6 @@ export default function App() {
               </div>
             </div>
 
-            {}
             <div className="space-y-4 p-4 bg-slate-950 rounded-xl border border-slate-800">
               <div className="flex items-center gap-2 text-red-400 mb-2">
                 <ShieldAlert className="w-4 h-4" />
@@ -624,14 +685,17 @@ export default function App() {
               </div>
               <div className="space-y-2">
                 <label className="text-[10px] text-slate-500 font-bold uppercase tracking-tight">Master Server IP</label>
-                <input 
-                  type="text" 
-                  value={masterServiceIp}
-                  onChange={(e) => setMasterServiceIp(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs focus:ring-1 focus:ring-red-500 outline-none font-mono"
-                  placeholder="e.g. 192.168.1.50"
-                />
-                <p className="text-[9px] text-slate-500 italic">Background monitoring IP. Syncs automatically on fleet changes.</p>
+                <div className="relative">
+                    <input 
+                    type="text" 
+                    value={masterServiceIp}
+                    onChange={(e) => setMasterServiceIp(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs focus:ring-1 focus:ring-red-500 outline-none font-mono"
+                    placeholder="e.g. 192.168.1.50"
+                    />
+                    <div className={`absolute right-2 top-1/2 -translate-y-1/2 w-2 h-2 rounded-full ${masterLinkStatus === 'online' ? 'bg-emerald-500' : 'bg-red-500'}`} />
+                </div>
+                <p className="text-[9px] text-slate-500 italic">Central monitor link status: <span className="font-bold uppercase">{masterLinkStatus}</span></p>
               </div>
             </div>
 
@@ -677,7 +741,6 @@ export default function App() {
         </div>
       )}
 
-      {}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         <div className="lg:col-span-4 space-y-4 h-[calc(100vh-250px)] overflow-y-auto pr-2 custom-scrollbar">
           {filteredStations.map(station => (
@@ -842,7 +905,6 @@ export default function App() {
         </div>
       </div>
 
-      {}
       {showManualControl && selectedStation && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl shadow-2xl animate-in zoom-in duration-200 overflow-hidden">
@@ -887,7 +949,7 @@ export default function App() {
                     </div>
                   </div>
                 )}
-                {/* ... (OSC/Serial forms omitted for brevity as per existing pattern but logic remains) ... */}
+                {/* ... OSC/Serial forms as per existing logic ... */}
               </div>
             </div>
             <div className="p-4 bg-slate-900 text-[10px] text-slate-500 border-t border-slate-800 text-center uppercase tracking-widest font-bold">Targeting: {selectedStation.ip}</div>
@@ -923,7 +985,6 @@ export default function App() {
         </div>
       )}
 
-      {}
       {notification && (
         <div className={`fixed bottom-8 left-1/2 -translate-x-1/2 z-[200] px-6 py-3 rounded-2xl border shadow-2xl flex items-center gap-3 animate-in slide-in-from-bottom duration-300 ${
           notification.type === 'success' ? 'bg-emerald-600 border-emerald-400 text-white' :
