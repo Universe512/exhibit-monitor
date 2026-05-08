@@ -3,16 +3,17 @@ import {
   Monitor, Cpu, HardDrive, Activity, RefreshCw, Power, 
   AlertTriangle, Settings, Search, Thermometer, Zap, Plus, X, Check,
   Wifi, ShieldCheck, Info, Radar, Music, Radio, Terminal, Send, Cpu as Cable,
-  Play, Command, Loader2, ShieldAlert, Camera, Heart
+  Play, Command, Loader2, ShieldAlert, Camera, Heart, LayoutGrid, Settings2,
+  Clock, Gauge, ChevronRight
 } from 'lucide-react';
 
 const AGENT_PORT = 5001;
 const STORAGE_KEY = 'museum_monitor_stations';
 const SUBNET_KEY = 'museum_monitor_subnet';
-const RESTART_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+const REFRESH_RATE_KEY = 'museum_monitor_refresh_rate';
+const RESTART_TIMEOUT_MS = 5 * 60 * 1000; 
 
 export default function App() {
-  // --- Persistent State ---
   const [adoptedIps, setAdoptedIps] = useState(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
     return saved ? JSON.parse(saved) : ['127.0.0.1'];
@@ -22,7 +23,10 @@ export default function App() {
     return localStorage.getItem(SUBNET_KEY) || '192.168.1';
   });
 
-  // --- UI & Data State ---
+  const [refreshRate, setRefreshRate] = useState(() => {
+    return parseInt(localStorage.getItem(REFRESH_RATE_KEY)) || 5000;
+  });
+
   const [stations, setStations] = useState([]);
   const [discoveredStations, setDiscoveredStations] = useState([]);
   const [selectedStationId, setSelectedStationId] = useState(null);
@@ -32,18 +36,18 @@ export default function App() {
   const [searchTerm, setSearchTerm] = useState('');
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [lastUpdate, setLastUpdate] = useState(null);
-  const [showSettings, setShowSettings] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
   const [showManualControl, setShowManualControl] = useState(false);
-  const [isPulsing, setIsPulsing] = useState(false); // Heartbeat pulse state
+  const [isPulsing, setIsPulsing] = useState(false); 
+
+  // New Navigation States
+  const [showSettingsDropdown, setShowSettingsDropdown] = useState(false);
+  const [activeSettingsPanel, setActiveSettingsPanel] = useState(null); // 'fleet' or 'config'
 
   const [screenshot, setScreenshot] = useState(null);
   const [loadingScreenshot, setLoadingScreenshot] = useState(false);
-  
-  // Track apps currently being restarted
   const [restartingApps, setRestartingApps] = useState({});
   
-  // --- Remote Control State ---
   const [controlTab, setControlTab] = useState('midi');
   const [controlPayload, setControlPayload] = useState({
     midi: { note: 60, velocity: 100, channel: 1 },
@@ -62,7 +66,8 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(adoptedIps));
     localStorage.setItem(SUBNET_KEY, scanSubnet);
-  }, [adoptedIps, scanSubnet]);
+    localStorage.setItem(REFRESH_RATE_KEY, refreshRate.toString());
+  }, [adoptedIps, scanSubnet, refreshRate]);
 
   useEffect(() => {
     setStations(prev => {
@@ -84,7 +89,6 @@ export default function App() {
     });
   }, [adoptedIps]);
 
-  // --- Optimized Polling Logic with Heartbeat Trigger ---
   const pollAgents = useCallback(async () => {
     const currentStations = stationsRef.current;
     if (currentStations.length === 0) return;
@@ -161,7 +165,6 @@ export default function App() {
     setApps(prev => ({ ...prev, ...newApps }));
     setPresets(prev => ({ ...prev, ...newPresets }));
     
-    // --- HEARTBEAT TRIGGER ---
     setLastUpdate(new Date().toLocaleTimeString());
     setIsPulsing(true);
     setTimeout(() => setIsPulsing(false), 800); 
@@ -171,11 +174,12 @@ export default function App() {
     const hasActiveRestarts = Object.values(restartingApps).some(station => 
       Object.values(station).some(app => app.status === 'restarting')
     );
-    const intervalTime = hasActiveRestarts ? 2000 : 5000;
+    // Dynamic interval based on config and active operations
+    const intervalTime = hasActiveRestarts ? Math.min(2000, refreshRate) : refreshRate;
     pollAgents();
     const interval = setInterval(pollAgents, intervalTime);
     return () => clearInterval(interval);
-  }, [pollAgents, restartingApps]);
+  }, [pollAgents, restartingApps, refreshRate]);
 
   useEffect(() => {
     const watchdog = setInterval(() => {
@@ -324,7 +328,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* NEW HEARTBEAT INDICATOR */}
         <div className="hidden lg:flex items-center gap-3 bg-slate-900/50 px-4 py-2 rounded-xl border border-slate-800 shadow-lg">
           <div className="relative">
             <Heart 
@@ -351,16 +354,61 @@ export default function App() {
               onChange={(e) => setSearchTerm(e.target.value)}
             />
           </div>
-          <button 
-            onClick={() => setShowSettings(!showSettings)}
-            className={`p-2 rounded-lg border transition-all ${showSettings ? 'bg-blue-600 border-blue-500 shadow-lg shadow-blue-500/20' : 'bg-slate-900 border-slate-800 hover:bg-slate-800'}`}
-          >
-            <Settings className="w-5 h-5" />
-          </button>
+          
+          {/* Settings Dropdown Container */}
+          <div className="relative">
+            <button 
+              onClick={() => setShowSettingsDropdown(!showSettingsDropdown)}
+              className={`p-2 rounded-lg border transition-all ${showSettingsDropdown || activeSettingsPanel ? 'bg-blue-600 border-blue-500 shadow-lg shadow-blue-500/20' : 'bg-slate-900 border-slate-800 hover:bg-slate-800'}`}
+            >
+              <Settings className={`w-5 h-5 ${showSettingsDropdown ? 'rotate-90' : ''} transition-transform duration-300`} />
+            </button>
+
+            { }
+            {showSettingsDropdown && (
+              <div className="absolute right-0 mt-2 w-64 bg-slate-900 border border-slate-800 rounded-xl shadow-2xl z-[100] overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+                <div className="p-2 space-y-1">
+                  <button 
+                    onClick={() => { setActiveSettingsPanel('fleet'); setShowSettingsDropdown(false); }}
+                    className="w-full flex items-center justify-between p-3 rounded-lg hover:bg-slate-800 transition-colors text-left group"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="bg-blue-500/10 p-1.5 rounded text-blue-400 group-hover:bg-blue-500 group-hover:text-white transition-all">
+                        <LayoutGrid className="w-4 h-4" />
+                      </div>
+                      <span className="text-sm font-bold">Fleet Management</span>
+                    </div>
+                    <ChevronRight className="w-4 h-4 text-slate-600 group-hover:translate-x-0.5 transition-transform" />
+                  </button>
+                  <button 
+                    onClick={() => { setActiveSettingsPanel('config'); setShowSettingsDropdown(false); }}
+                    className="w-full flex items-center justify-between p-3 rounded-lg hover:bg-slate-800 transition-colors text-left group"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="bg-purple-500/10 p-1.5 rounded text-purple-400 group-hover:bg-purple-500 group-hover:text-white transition-all">
+                        <Settings2 className="w-4 h-4" />
+                      </div>
+                      <span className="text-sm font-bold">System Config</span>
+                    </div>
+                    <ChevronRight className="w-4 h-4 text-slate-600 group-hover:translate-x-0.5 transition-transform" />
+                  </button>
+                </div>
+                <div className="p-3 bg-slate-950/50 border-t border-slate-800 flex items-center justify-between">
+                  <span className="text-[10px] font-black text-slate-500 uppercase">Version 2.4.0</span>
+                  <button 
+                    onClick={() => { setActiveSettingsPanel(null); setShowSettingsDropdown(false); }}
+                    className="text-[10px] text-blue-500 font-black uppercase hover:text-blue-400"
+                  >
+                    Close All
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </header>
 
-      {}
+      { }
       {discoveredStations.length > 0 && (
         <div className="mb-6 animate-in slide-in-from-top duration-500">
           <div className="bg-blue-600/20 border border-blue-500/50 rounded-xl p-4 flex flex-col md:flex-row items-center justify-between gap-4">
@@ -391,54 +439,42 @@ export default function App() {
         </div>
       )}
 
-      {showSettings && (
+      { }
+      {activeSettingsPanel === 'fleet' && (
         <div className="mb-6 bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-2xl animate-in fade-in zoom-in duration-200">
           <div className="flex justify-between items-center mb-6">
             <h2 className="text-xl font-bold flex items-center gap-2 text-blue-400">
-              <Settings className="w-5 h-5" />
-              Fleet Configuration
+              <LayoutGrid className="w-5 h-5" />
+              Fleet Management
             </h2>
-            <button onClick={() => setShowSettings(false)} className="bg-slate-800 p-1.5 rounded-full text-slate-500 hover:text-white transition-colors">
+            <button onClick={() => setActiveSettingsPanel(null)} className="bg-slate-800 p-1.5 rounded-full text-slate-500 hover:text-white transition-colors">
               <X className="w-4 h-4" />
             </button>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
             <div className="space-y-4">
-              <label className="block text-xs font-bold text-slate-500 uppercase tracking-widest">Auto-Discovery Engine</label>
+              <label className="block text-xs font-bold text-slate-500 uppercase tracking-widest">Discovery Engine</label>
               <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-4">
                 <div className="space-y-2">
                   <span className="text-xs text-slate-400 font-medium">Subnet Mask</span>
-                  <div className="flex gap-2">
-                    <input 
-                      type="text" 
-                      value={scanSubnet}
-                      onChange={(e) => setScanSubnet(e.target.value)}
-                      className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm flex-1 focus:ring-1 focus:ring-blue-500 outline-none"
-                      placeholder="e.g. 192.168.1"
-                    />
-                  </div>
+                  <input 
+                    type="text" 
+                    value={scanSubnet}
+                    onChange={(e) => setScanSubnet(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm focus:ring-1 focus:ring-blue-500 outline-none"
+                    placeholder="e.g. 192.168.1"
+                  />
                 </div>
                 <div className="grid grid-cols-2 gap-2 pt-2">
-                  <button 
-                    onClick={() => scanForNewExhibits(false)}
-                    disabled={isScanning}
-                    className="bg-slate-800 hover:bg-slate-700 disabled:opacity-50 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all border border-slate-700"
-                  >
-                    <RefreshCw className={`w-3 h-3 ${isScanning ? 'animate-spin' : ''}`} />
-                    Quick Scan
+                  <button onClick={() => scanForNewExhibits(false)} disabled={isScanning} className="bg-slate-800 hover:bg-slate-700 disabled:opacity-50 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-2 border border-slate-700">
+                    <RefreshCw className={`w-3 h-3 ${isScanning ? 'animate-spin' : ''}`} /> Quick Scan
                   </button>
-                  <button 
-                    onClick={() => scanForNewExhibits(true)}
-                    disabled={isScanning}
-                    className="bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 border border-blue-500/30 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all"
-                  >
-                    <Radar className={`w-3 h-3 ${isScanning ? 'animate-spin' : ''}`} />
-                    Force Deep Scan
+                  <button onClick={() => scanForNewExhibits(true)} disabled={isScanning} className="bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 border border-blue-500/30 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-2">
+                    <Radar className={`w-3 h-3 ${isScanning ? 'animate-spin' : ''}`} /> Force Deep Scan
                   </button>
                 </div>
               </div>
             </div>
-            
             <div className="space-y-4">
               <label className="block text-xs font-bold text-slate-500 uppercase tracking-widest">Active Fleet ({adoptedIps.length})</label>
               <div className="max-h-48 overflow-y-auto bg-slate-950 rounded-xl border border-slate-800 p-1 space-y-1">
@@ -448,11 +484,7 @@ export default function App() {
                       <div className={`w-1.5 h-1.5 rounded-full ${stations.find(s=>s.ip === ip)?.status === 'online' ? 'bg-emerald-500' : 'bg-slate-600'}`} />
                       <span className="font-mono text-slate-300">{ip}</span>
                     </div>
-                    <button 
-                      onClick={() => removeStation(ip)} 
-                      className="text-slate-500 hover:text-red-400 p-1 transition-colors"
-                      title="Remove from fleet"
-                    >
+                    <button onClick={() => removeStation(ip)} className="text-slate-500 hover:text-red-400 p-1 transition-colors">
                       <X className="w-3.5 h-3.5" />
                     </button>
                   </div>
@@ -463,9 +495,77 @@ export default function App() {
         </div>
       )}
 
-      {}
+      {activeSettingsPanel === 'config' && (
+        <div className="mb-6 bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-2xl animate-in fade-in zoom-in duration-200">
+          <div className="flex justify-between items-center mb-6 text-purple-400">
+            <h2 className="text-xl font-bold flex items-center gap-2">
+              <Settings2 className="w-5 h-5" />
+              System Configuration
+            </h2>
+            <button onClick={() => setActiveSettingsPanel(null)} className="bg-slate-800 p-1.5 rounded-full text-slate-500 hover:text-white transition-colors">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="space-y-4 p-4 bg-slate-950 rounded-xl border border-slate-800">
+              <div className="flex items-center gap-2 text-blue-400 mb-2">
+                <Clock className="w-4 h-4" />
+                <span className="text-xs font-black uppercase tracking-widest">Fleet Refresh</span>
+              </div>
+              <div className="space-y-4">
+                <div className="flex justify-between text-sm">
+                  <span className="text-slate-400 font-medium">Heartbeat Rate</span>
+                  <span className="text-white font-mono">{refreshRate}ms</span>
+                </div>
+                <input 
+                  type="range" min="1000" max="30000" step="500"
+                  value={refreshRate}
+                  onChange={(e) => setRefreshRate(parseInt(e.target.value))}
+                  className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                />
+                <p className="text-[10px] text-slate-500 italic">Frequency of background agent health polling. Lower is more responsive but increases network load.</p>
+              </div>
+            </div>
+
+            <div className="space-y-4 p-4 bg-slate-950 rounded-xl border border-slate-800">
+              <div className="flex items-center gap-2 text-emerald-400 mb-2">
+                <Gauge className="w-4 h-4" />
+                <span className="text-xs font-black uppercase tracking-widest">Performance</span>
+              </div>
+              <div className="space-y-3">
+                 <div className="flex items-center justify-between">
+                    <span className="text-xs text-slate-400">High-Freq Polling (Restarts)</span>
+                    <div className="w-8 h-4 bg-blue-600 rounded-full relative"><div className="absolute right-1 top-1 w-2 h-2 bg-white rounded-full"></div></div>
+                 </div>
+                 <div className="flex items-center justify-between">
+                    <span className="text-xs text-slate-400">Vitals smoothing</span>
+                    <div className="w-8 h-4 bg-slate-700 rounded-full relative"><div className="absolute left-1 top-1 w-2 h-2 bg-white rounded-full"></div></div>
+                 </div>
+                 <div className="flex items-center justify-between">
+                    <span className="text-xs text-slate-400">Auto-Screenshot Previews</span>
+                    <div className="w-8 h-4 bg-slate-700 rounded-full relative"><div className="absolute left-1 top-1 w-2 h-2 bg-white rounded-full"></div></div>
+                 </div>
+              </div>
+            </div>
+
+            <div className="space-y-4 p-4 bg-slate-950 rounded-xl border border-slate-800">
+              <div className="flex items-center gap-2 text-amber-400 mb-2">
+                <ShieldCheck className="w-4 h-4" />
+                <span className="text-xs font-black uppercase tracking-widest">Security</span>
+              </div>
+              <div className="space-y-2">
+                 <button className="w-full py-2 bg-slate-900 border border-slate-800 rounded text-[10px] font-bold uppercase hover:bg-slate-800 text-slate-400">Export Fleet Log</button>
+                 <button className="w-full py-2 bg-slate-900 border border-slate-800 rounded text-[10px] font-bold uppercase hover:bg-red-500/10 hover:text-red-400 hover:border-red-500/20">Purge Cached Tokens</button>
+                 <button className="w-full py-2 bg-blue-600 text-white rounded text-[10px] font-bold uppercase">Save Master config</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Main Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Sidebar */}
         <div className="lg:col-span-4 space-y-4 h-[calc(100vh-250px)] overflow-y-auto pr-2 custom-scrollbar">
           {filteredStations.map(station => (
             <StationCard 
@@ -480,12 +580,11 @@ export default function App() {
             <div className="py-20 text-center text-slate-600 border border-dashed border-slate-800 rounded-2xl bg-slate-900/20">
               <Monitor className="w-12 h-12 mx-auto mb-4 opacity-5" />
               <p className="text-sm">Fleet is empty or no matches found.</p>
-              <button onClick={() => setShowSettings(true)} className="text-blue-500 hover:text-blue-400 text-xs font-bold mt-4">OPEN SETTINGS</button>
+              <button onClick={() => setActiveSettingsPanel('fleet')} className="text-blue-500 hover:text-blue-400 text-xs font-bold mt-4">OPEN FLEET MANAGER</button>
             </div>
           )}
         </div>
 
-        {/* Details Panel */}
         <div className="lg:col-span-8 bg-slate-900/50 border border-slate-800 rounded-2xl p-6 relative h-[calc(100vh-250px)] overflow-y-auto custom-scrollbar">
           {!selectedStation ? (
             <div className="h-full flex flex-col items-center justify-center text-slate-600 space-y-4 italic">
@@ -577,7 +676,6 @@ export default function App() {
                 </div>
               )}
 
-              {}
               <div className="space-y-4">
                 <div className="flex items-center justify-between border-b border-slate-800 pb-2">
                    <h3 className="text-sm font-black uppercase tracking-widest flex items-center gap-2 text-blue-400/80">
@@ -782,7 +880,6 @@ export default function App() {
         </div>
       )}
 
-      {}
       {screenshot && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/90 backdrop-blur-md animate-in fade-in duration-300">
           <div className="relative max-w-5xl w-full bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl animate-in zoom-in duration-300">
