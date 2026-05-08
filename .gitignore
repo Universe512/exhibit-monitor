@@ -1,4 +1,6 @@
 node_modules/
-pc_app/Exhibits+.spec
-pc_app/build/
-pc_app/dist/
+Exhibits+.spec
+build/
+dist/
+exhibit-monitor.sln
+monitor.spec
