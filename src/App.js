@@ -5,13 +5,14 @@ import {
   Wifi, ShieldCheck, Info, Radar, Music, Radio, Terminal, Send, Cpu as Cable,
   Play, Command, Loader2, ShieldAlert, Camera, Heart, LayoutGrid, Settings2,
   Clock, Gauge, ChevronRight, ToggleLeft, ToggleRight, Download, Trash2, Save,
-  Server, Link as LinkIcon, Link2Off
+  Server, Link as LinkIcon, Link2Off, Activity as PulseIcon
 } from 'lucide-react';
 
 const AGENT_PORT = 5001;
 const STORAGE_KEY = 'museum_monitor_stations';
 const SUBNET_KEY = 'museum_monitor_subnet';
 const REFRESH_RATE_KEY = 'museum_monitor_refresh_rate';
+const MASTER_REFRESH_KEY = 'museum_monitor_master_refresh';
 const CONFIG_OPTIONS_KEY = 'museum_monitor_config_options';
 const MASTER_IP_KEY = 'museum_monitor_master_ip'; 
 const RESTART_TIMEOUT_MS = 5 * 60 * 1000; 
@@ -29,6 +30,11 @@ export default function App() {
   const [refreshRate, setRefreshRate] = useState(() => {
     const saved = localStorage.getItem(REFRESH_RATE_KEY);
     return saved ? parseInt(saved) : 5000;
+  });
+
+  const [masterRefreshRate, setMasterRefreshRate] = useState(() => {
+    const saved = localStorage.getItem(MASTER_REFRESH_KEY);
+    return saved ? parseInt(saved) : 10000;
   });
 
   const [masterServiceIp, setMasterServiceIp] = useState(() => {
@@ -58,8 +64,7 @@ export default function App() {
   const [isPulsing, setIsPulsing] = useState(false); 
   const [notification, setNotification] = useState(null);
 
-  // Master Service Status States
-  const [masterLinkStatus, setMasterLinkStatus] = useState('offline'); // online, offline, syncing
+  const [masterLinkStatus, setMasterLinkStatus] = useState('offline'); 
   const [lastMasterSync, setLastMasterSync] = useState(null);
   const [isMasterPulsing, setIsMasterPulsing] = useState(false);
 
@@ -98,7 +103,7 @@ export default function App() {
         setMasterLinkStatus('online');
         setLastMasterSync(new Date().toLocaleTimeString());
         setIsMasterPulsing(true);
-        setTimeout(() => setIsMasterPulsing(false), 1000);
+        setTimeout(() => setIsMasterPulsing(false), 800);
       } else {
         setMasterLinkStatus('offline');
       }
@@ -107,15 +112,19 @@ export default function App() {
     }
   }, [masterServiceIp]);
 
-  // Master health check watchdog
   useEffect(() => {
-    if (!masterServiceIp) return;
+    if (!masterServiceIp) {
+      setMasterLinkStatus('offline');
+      return;
+    }
     
     const checkMaster = async () => {
       try {
         const response = await fetch(`http://${masterServiceIp}:5002/sync`, { method: 'GET' });
         if (response.ok) {
           setMasterLinkStatus('online');
+          setIsMasterPulsing(true);
+          setTimeout(() => setIsMasterPulsing(false), 800);
         } else {
           setMasterLinkStatus('offline');
         }
@@ -125,20 +134,18 @@ export default function App() {
     };
 
     checkMaster();
-    const interval = setInterval(checkMaster, 10000); // Check every 10s
+    const interval = setInterval(checkMaster, masterRefreshRate);
     return () => clearInterval(interval);
-  }, [masterServiceIp]);
+  }, [masterServiceIp, masterRefreshRate]);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(adoptedIps));
     localStorage.setItem(SUBNET_KEY, scanSubnet);
     localStorage.setItem(REFRESH_RATE_KEY, refreshRate.toString());
+    localStorage.setItem(MASTER_REFRESH_KEY, masterRefreshRate.toString());
     localStorage.setItem(CONFIG_OPTIONS_KEY, JSON.stringify(configOptions));
     localStorage.setItem(MASTER_IP_KEY, masterServiceIp);
-    
-    // Auto-sync whenever the fleet changes
-    syncToMaster(adoptedIps);
-  }, [adoptedIps, scanSubnet, refreshRate, configOptions, masterServiceIp, syncToMaster]);
+  }, [adoptedIps, scanSubnet, refreshRate, masterRefreshRate, configOptions, masterServiceIp]);
 
   useEffect(() => {
     setStations(prev => {
@@ -158,7 +165,8 @@ export default function App() {
       stationsRef.current = result;
       return result;
     });
-  }, [adoptedIps]);
+    syncToMaster(adoptedIps);
+  }, [adoptedIps, syncToMaster]);
 
   const showToast = (message, type = 'info') => {
     setNotification({ message, type });
@@ -293,6 +301,7 @@ export default function App() {
       })),
       configuration: {
         refreshRate,
+        masterRefreshRate,
         configOptions,
         scanSubnet,
         masterServiceIp
@@ -316,6 +325,7 @@ export default function App() {
     setAdoptedIps(['127.0.0.1']);
     setScanSubnet('192.168.1');
     setRefreshRate(5000);
+    setMasterRefreshRate(10000);
     setMasterServiceIp('');
     setConfigOptions({
       highFreq: true,
@@ -329,6 +339,7 @@ export default function App() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(adoptedIps));
     localStorage.setItem(SUBNET_KEY, scanSubnet);
     localStorage.setItem(REFRESH_RATE_KEY, refreshRate.toString());
+    localStorage.setItem(MASTER_REFRESH_KEY, masterRefreshRate.toString());
     localStorage.setItem(CONFIG_OPTIONS_KEY, JSON.stringify(configOptions));
     localStorage.setItem(MASTER_IP_KEY, masterServiceIp);
     
@@ -455,7 +466,7 @@ export default function App() {
 
         <div className="flex flex-wrap items-center justify-center gap-4">
             {/* FLEET HEARTBEAT */}
-            <div className="hidden lg:flex items-center gap-3 bg-slate-900/50 px-4 py-2 rounded-xl border border-slate-800 shadow-lg">
+            <div className="hidden lg:flex items-center gap-3 bg-slate-900/50 px-4 py-2 rounded-xl border border-slate-800 shadow-lg transition-all">
                 <div className="relative">
                 <Heart 
                     className={`w-5 h-5 transition-all duration-300 ${isPulsing ? 'text-red-500 fill-red-500 scale-125' : 'text-slate-600'}`} 
@@ -546,7 +557,7 @@ export default function App() {
                   </button>
                 </div>
                 <div className="p-3 bg-slate-950/50 border-t border-slate-800 flex items-center justify-between">
-                  <span className="text-[10px] font-black text-slate-500 uppercase">Version 2.6.0</span>
+                  <span className="text-[10px] font-black text-slate-500 uppercase">Version 2.7.0</span>
                   <button 
                     onClick={() => { setActiveSettingsPanel(null); setShowSettingsDropdown(false); }}
                     className="text-[10px] text-blue-500 font-black uppercase hover:text-blue-400"
@@ -659,14 +670,15 @@ export default function App() {
           </div>
           
           <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+            {/* Fleet Refresh Rate */}
             <div className="space-y-4 p-4 bg-slate-950 rounded-xl border border-slate-800">
               <div className="flex items-center gap-2 text-blue-400 mb-2">
                 <Clock className="w-4 h-4" />
-                <span className="text-xs font-black uppercase tracking-widest">Fleet Refresh</span>
+                <span className="text-xs font-black uppercase tracking-widest">Fleet Heartbeat</span>
               </div>
               <div className="space-y-4">
                 <div className="flex justify-between text-sm">
-                  <span className="text-slate-400 font-medium">Heartbeat Rate</span>
+                  <span className="text-slate-400 font-medium">Exhibit Rate</span>
                   <span className="text-white font-mono">{refreshRate}ms</span>
                 </div>
                 <input 
@@ -678,27 +690,42 @@ export default function App() {
               </div>
             </div>
 
+            {/* Master Service Link */}
             <div className="space-y-4 p-4 bg-slate-950 rounded-xl border border-slate-800">
               <div className="flex items-center gap-2 text-red-400 mb-2">
                 <ShieldAlert className="w-4 h-4" />
                 <span className="text-xs font-black uppercase tracking-widest">Master Service</span>
               </div>
-              <div className="space-y-2">
-                <label className="text-[10px] text-slate-500 font-bold uppercase tracking-tight">Master Server IP</label>
-                <div className="relative">
-                    <input 
-                    type="text" 
-                    value={masterServiceIp}
-                    onChange={(e) => setMasterServiceIp(e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs focus:ring-1 focus:ring-red-500 outline-none font-mono"
-                    placeholder="e.g. 192.168.1.50"
-                    />
-                    <div className={`absolute right-2 top-1/2 -translate-y-1/2 w-2 h-2 rounded-full ${masterLinkStatus === 'online' ? 'bg-emerald-500' : 'bg-red-500'}`} />
+              <div className="space-y-4">
+                <div className="space-y-1">
+                    <label className="text-[10px] text-slate-500 font-bold uppercase tracking-tight">Master IP</label>
+                    <div className="relative">
+                        <input 
+                        type="text" 
+                        value={masterServiceIp}
+                        onChange={(e) => setMasterServiceIp(e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs focus:ring-1 focus:ring-red-500 outline-none font-mono"
+                        placeholder="e.g. 192.168.1.50"
+                        />
+                        <div className={`absolute right-2 top-1/2 -translate-y-1/2 w-2 h-2 rounded-full ${masterLinkStatus === 'online' ? 'bg-emerald-500' : 'bg-red-500'}`} />
+                    </div>
                 </div>
-                <p className="text-[9px] text-slate-500 italic">Central monitor link status: <span className="font-bold uppercase">{masterLinkStatus}</span></p>
+                <div className="space-y-2">
+                    <div className="flex justify-between text-[10px]">
+                        <span className="text-slate-400 font-medium">Link Refresh</span>
+                        <span className="text-white font-mono">{(masterRefreshRate/1000).toFixed(0)}s</span>
+                    </div>
+                    <input 
+                        type="range" min="1000" max="60000" step="1000"
+                        value={masterRefreshRate}
+                        onChange={(e) => setMasterRefreshRate(parseInt(e.target.value))}
+                        className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-red-500"
+                    />
+                </div>
               </div>
             </div>
 
+            {/* Performance Controls */}
             <div className="space-y-4 p-4 bg-slate-950 rounded-xl border border-slate-800">
               <div className="flex items-center gap-2 text-emerald-400 mb-2">
                 <Gauge className="w-4 h-4" />
@@ -720,20 +747,21 @@ export default function App() {
               </div>
             </div>
 
+            {/* Global Actions */}
             <div className="space-y-4 p-4 bg-slate-950 rounded-xl border border-slate-800">
               <div className="flex items-center gap-2 text-amber-400 mb-2">
                 <ShieldCheck className="w-4 h-4" />
-                <span className="text-xs font-black uppercase tracking-widest">Actions</span>
+                <span className="text-xs font-black uppercase tracking-widest">System Actions</span>
               </div>
               <div className="space-y-2">
-                 <button onClick={exportFleetLog} className="w-full py-2 bg-slate-900 border border-slate-800 rounded text-[10px] font-bold uppercase hover:bg-slate-800 flex items-center justify-center gap-2 transition-colors">
+                 <button onClick={exportFleetLog} className="w-full py-2 bg-slate-900 border border-slate-800 rounded text-[10px] font-bold uppercase hover:bg-slate-800 flex items-center justify-center gap-2 transition-all">
                    <Download className="w-3 h-3" /> Export Log
                  </button>
-                 <button onClick={purgeCache} className="w-full py-2 bg-slate-900 border border-slate-800 rounded text-[10px] font-bold uppercase hover:bg-red-500/10 hover:text-red-400 flex items-center justify-center gap-2 transition-colors">
+                 <button onClick={purgeCache} className="w-full py-2 bg-slate-900 border border-slate-800 rounded text-[10px] font-bold uppercase hover:bg-red-500/10 hover:text-red-400 flex items-center justify-center gap-2 transition-all">
                    <Trash2 className="w-3 h-3" /> Purge Cache
                  </button>
-                 <button onClick={saveMasterConfig} className="w-full py-2 bg-blue-600 text-white rounded text-[10px] font-bold uppercase flex items-center justify-center gap-2 hover:bg-blue-500 transition-colors shadow-lg shadow-blue-500/20">
-                   <Save className="w-3 h-3" /> Save All
+                 <button onClick={saveMasterConfig} className="w-full py-2 bg-blue-600 text-white rounded text-[10px] font-bold uppercase flex items-center justify-center gap-2 hover:bg-blue-500 transition-all shadow-lg shadow-blue-500/20">
+                   <Save className="w-3 h-3" /> Save & Sync
                  </button>
               </div>
             </div>
@@ -741,7 +769,9 @@ export default function App() {
         </div>
       )}
 
+      {}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        {/* Sidebar Station List */}
         <div className="lg:col-span-4 space-y-4 h-[calc(100vh-250px)] overflow-y-auto pr-2 custom-scrollbar">
           {filteredStations.map(station => (
             <StationCard 
@@ -762,6 +792,7 @@ export default function App() {
           )}
         </div>
 
+        {/* Detailed Station View */}
         <div className="lg:col-span-8 bg-slate-900/50 border border-slate-800 rounded-2xl p-6 relative h-[calc(100vh-250px)] overflow-y-auto custom-scrollbar">
           {!selectedStation ? (
             <div className="h-full flex flex-col items-center justify-center text-slate-600 space-y-4 italic">
@@ -826,6 +857,7 @@ export default function App() {
                 <VitalMeter icon={<Thermometer />} label="TEMP" value={vitals[selectedStation.id]?.temp} unit="°C" color="orange" limit={75} smoothing={configOptions.smoothing} />
               </div>
 
+              {}
               {presets[selectedStation.id]?.length > 0 && (
                 <div className="space-y-4">
                   <div className="flex items-center justify-between border-b border-slate-800 pb-2">
@@ -905,6 +937,7 @@ export default function App() {
         </div>
       </div>
 
+      {}
       {showManualControl && selectedStation && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl shadow-2xl animate-in zoom-in duration-200 overflow-hidden">
@@ -917,7 +950,6 @@ export default function App() {
                 <X className="w-5 h-5" />
               </button>
             </div>
-            
             <div className="bg-slate-950/50">
               <div className="flex items-center border-b border-slate-800 bg-slate-900/50">
                 <button onClick={() => setControlTab('midi')} className={`flex-1 flex items-center justify-center gap-2 py-4 text-xs font-black uppercase tracking-widest transition-all ${controlTab === 'midi' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:text-slate-300'}`}>
@@ -930,7 +962,6 @@ export default function App() {
                   <Terminal className="w-4 h-4" /> SERIAL
                 </button>
               </div>
-              
               <div className="p-8">
                 {controlTab === 'midi' && (
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-6 animate-in fade-in duration-300">
@@ -949,7 +980,7 @@ export default function App() {
                     </div>
                   </div>
                 )}
-                {/* ... OSC/Serial forms as per existing logic ... */}
+                {/* ... OSC/Serial tabs remain identical ... */}
               </div>
             </div>
             <div className="p-4 bg-slate-900 text-[10px] text-slate-500 border-t border-slate-800 text-center uppercase tracking-widest font-bold">Targeting: {selectedStation.ip}</div>
