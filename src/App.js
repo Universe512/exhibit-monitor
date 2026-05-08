@@ -3,7 +3,7 @@ import {
   Monitor, Cpu, HardDrive, Activity, RefreshCw, Power, 
   AlertTriangle, Settings, Search, Thermometer, Zap, Plus, X, Check,
   Wifi, ShieldCheck, Info, Radar, Music, Radio, Terminal, Send, Cpu as Cable,
-  Play, Command, Loader2, ShieldAlert, Camera
+  Play, Command, Loader2, ShieldAlert, Camera, Heart
 } from 'lucide-react';
 
 const AGENT_PORT = 5001;
@@ -35,11 +35,12 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
   const [showManualControl, setShowManualControl] = useState(false);
+  const [isPulsing, setIsPulsing] = useState(false); // Heartbeat pulse state
 
   const [screenshot, setScreenshot] = useState(null);
   const [loadingScreenshot, setLoadingScreenshot] = useState(false);
   
-  // Track apps currently being restarted: { [ip]: { [appName]: { startTime, status } } }
+  // Track apps currently being restarted
   const [restartingApps, setRestartingApps] = useState({});
   
   // --- Remote Control State ---
@@ -83,7 +84,7 @@ export default function App() {
     });
   }, [adoptedIps]);
 
-  // --- Optimized Polling Logic ---
+  // --- Optimized Polling Logic with Heartbeat Trigger ---
   const pollAgents = useCallback(async () => {
     const currentStations = stationsRef.current;
     if (currentStations.length === 0) return;
@@ -133,7 +134,6 @@ export default function App() {
         newApps[r.ip] = r.apps;
         newPresets[r.ip] = r.presets;
 
-        // Logic to clear "restarting" status if app is back to "running"
         if (restartingApps[r.ip]) {
           const stationRestarts = restartingApps[r.ip];
           let updated = false;
@@ -160,10 +160,13 @@ export default function App() {
     setVitals(prev => ({ ...prev, ...newVitals }));
     setApps(prev => ({ ...prev, ...newApps }));
     setPresets(prev => ({ ...prev, ...newPresets }));
+    
+    // --- HEARTBEAT TRIGGER ---
     setLastUpdate(new Date().toLocaleTimeString());
+    setIsPulsing(true);
+    setTimeout(() => setIsPulsing(false), 800); 
   }, [restartingApps]);
 
-  // Handle Polling Intervals dynamically
   useEffect(() => {
     const hasActiveRestarts = Object.values(restartingApps).some(station => 
       Object.values(station).some(app => app.status === 'restarting')
@@ -174,7 +177,6 @@ export default function App() {
     return () => clearInterval(interval);
   }, [pollAgents, restartingApps]);
 
-  // Watchdog for Restart Timeouts
   useEffect(() => {
     const watchdog = setInterval(() => {
       const now = Date.now();
@@ -196,7 +198,6 @@ export default function App() {
     return () => clearInterval(watchdog);
   }, [restartingApps]);
 
-  // --- Discovery Scanner ---
   const scanForNewExhibits = async (isDeepScan = false) => {
     if (isScanning) return;
     setIsScanning(true);
@@ -312,24 +313,40 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 p-4 md:p-8 font-sans">
-      <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
-        <div>
-          <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-400 to-emerald-400 bg-clip-text text-transparent">
-            Exhibit Monitor Pro
-          </h1>
-          <div className="flex items-center gap-2 text-slate-400 text-sm">
-            <span>Museum Fleet Management</span>
-            {lastUpdate && <span>• Last Sync: {lastUpdate}</span>}
+      <header className="flex flex-col md:flex-row justify-between items-center gap-6 mb-10 pb-8 border-b border-slate-800">
+        <div className="flex items-center gap-4">
+          <div className="bg-blue-600 p-3 rounded-2xl shadow-lg shadow-blue-500/20">
+            <ShieldCheck className="w-8 h-8 text-white" />
+          </div>
+          <div>
+            <h1 className="text-3xl font-black tracking-tighter text-white">MUSEUM<span className="text-blue-500">MONITOR</span></h1>
+            <p className="text-xs font-bold text-slate-500 uppercase tracking-widest text-nowrap">Exhibit Fleet Command</p>
           </div>
         </div>
-        
-        <div className="flex items-center gap-3">
+
+        {/* NEW HEARTBEAT INDICATOR */}
+        <div className="hidden lg:flex items-center gap-3 bg-slate-900/50 px-4 py-2 rounded-xl border border-slate-800 shadow-lg">
           <div className="relative">
+            <Heart 
+              className={`w-5 h-5 transition-all duration-300 ${isPulsing ? 'text-red-500 fill-red-500 scale-125' : 'text-slate-600'}`} 
+            />
+            {isPulsing && (
+              <span className="absolute inset-0 animate-ping rounded-full bg-red-500/20" />
+            )}
+          </div>
+          <div className="flex flex-col">
+            <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest leading-none mb-1 text-nowrap">Fleet Heartbeat</span>
+            <span className="text-xs font-mono text-slate-300 leading-none">{lastUpdate || 'Initializing...'}</span>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3 w-full md:w-auto">
+          <div className="relative flex-1 md:flex-none">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
             <input 
               type="text" 
               placeholder="Search fleet..." 
-              className="bg-slate-900 border border-slate-800 rounded-lg py-2 pl-10 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all w-64"
+              className="bg-slate-900 border border-slate-800 rounded-lg py-2 pl-10 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all w-full md:w-64"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
             />
@@ -374,7 +391,6 @@ export default function App() {
         </div>
       )}
 
-      {/* Settings Panel */}
       {showSettings && (
         <div className="mb-6 bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-2xl animate-in fade-in zoom-in duration-200">
           <div className="flex justify-between items-center mb-6">
@@ -447,10 +463,10 @@ export default function App() {
         </div>
       )}
 
-      {/* Main Grid */}
+      {}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Sidebar */}
-        <div className="lg:col-span-4 space-y-4 h-[calc(100vh-200px)] overflow-y-auto pr-2 custom-scrollbar">
+        <div className="lg:col-span-4 space-y-4 h-[calc(100vh-250px)] overflow-y-auto pr-2 custom-scrollbar">
           {filteredStations.map(station => (
             <StationCard 
               key={station.id}
@@ -470,7 +486,7 @@ export default function App() {
         </div>
 
         {/* Details Panel */}
-        <div className="lg:col-span-8 bg-slate-900/50 border border-slate-800 rounded-2xl p-6 relative h-[calc(100vh-200px)] overflow-y-auto custom-scrollbar">
+        <div className="lg:col-span-8 bg-slate-900/50 border border-slate-800 rounded-2xl p-6 relative h-[calc(100vh-250px)] overflow-y-auto custom-scrollbar">
           {!selectedStation ? (
             <div className="h-full flex flex-col items-center justify-center text-slate-600 space-y-4 italic">
               <ShieldCheck className="w-16 h-16 opacity-5" />
@@ -493,7 +509,6 @@ export default function App() {
                   </div>
                 </div>
                 
-                {}
                 <div className="flex flex-wrap gap-2">
                    <button 
                     onClick={() => removeStation(selectedStation.ip)}
@@ -535,7 +550,6 @@ export default function App() {
                 <VitalMeter icon={<Thermometer />} label="TEMP" value={vitals[selectedStation.id]?.temp} unit="°C" color="orange" limit={75} />
               </div>
 
-              {/* Remote Presets (Dynamic from Agent) */}
               {presets[selectedStation.id]?.length > 0 && (
                 <div className="space-y-4">
                   <div className="flex items-center justify-between border-b border-slate-800 pb-2">
@@ -563,6 +577,7 @@ export default function App() {
                 </div>
               )}
 
+              {}
               <div className="space-y-4">
                 <div className="flex items-center justify-between border-b border-slate-800 pb-2">
                    <h3 className="text-sm font-black uppercase tracking-widest flex items-center gap-2 text-blue-400/80">
