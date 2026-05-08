@@ -84,6 +84,27 @@ export default function App() {
   const stationsRef = useRef([]);
 
   useEffect(() => {
+    const watchdog = setInterval(() => {
+      const now = Date.now();
+      let changed = false;
+      const nextRestartingApps = { ...restartingApps };
+
+      Object.entries(nextRestartingApps).forEach(([ip, apps]) => {
+        Object.entries(apps).forEach(([appName, info]) => {
+          if (info.status === 'restarting' && now - info.startTime > RESTART_TIMEOUT_MS) {
+            nextRestartingApps[ip][appName] = { ...info, status: 'failed' };
+            changed = true;
+          }
+        });
+      });
+
+      if (changed) setRestartingApps(nextRestartingApps);
+    }, 5000);
+
+    return () => clearInterval(watchdog);
+  }, [restartingApps]);
+
+  useEffect(() => {
     const script = document.createElement("script");
     script.src = "https://cdn.tailwindcss.com";
     document.head.appendChild(script);
@@ -446,7 +467,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 p-4 md:p-8 font-sans">
-      {/* Header with indicators */}
       <header className="flex flex-col md:flex-row justify-between items-center gap-6 mb-10 pb-8 border-b border-slate-800">
         <div className="flex items-center gap-4">
           <div className="bg-blue-600 p-3 rounded-2xl shadow-lg shadow-blue-500/20">
@@ -459,7 +479,6 @@ export default function App() {
         </div>
 
         <div className="flex flex-wrap justify-center items-center gap-4">
-          {/* Master Link Heartbeat */}
           <div className={`flex items-center gap-3 bg-slate-900/50 px-4 py-2 rounded-xl border transition-all duration-500 shadow-lg ${masterLinkStatus === 'online' ? 'border-emerald-500/30' : 'border-red-500/30'}`}>
             <div className="relative">
               <Server 
@@ -480,7 +499,6 @@ export default function App() {
             </div>
           </div>
 
-          {/* Fleet Heartbeat */}
           <div className="hidden lg:flex items-center gap-3 bg-slate-900/50 px-4 py-2 rounded-xl border border-slate-800 shadow-lg">
             <div className="relative">
               <Heart 
@@ -497,7 +515,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* Global Search and Settings */}
         <div className="flex items-center gap-3 w-full md:w-auto">
           <div className="relative flex-1 md:flex-none">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
@@ -561,7 +578,7 @@ export default function App() {
         </div>
       </header>
 
-      {/* Discovery Alert */}
+      {}
       {discoveredStations.length > 0 && (
         <div className="mb-6 animate-in slide-in-from-top duration-500">
           <div className="bg-blue-600/20 border border-blue-500/50 rounded-xl p-4 flex flex-col md:flex-row items-center justify-between gap-4">
@@ -592,7 +609,6 @@ export default function App() {
         </div>
       )}
 
-      {/* Fleet Management Panel */}
       {activeSettingsPanel === 'fleet' && (
         <div className="mb-6 bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-2xl animate-in fade-in zoom-in duration-200">
           <div className="flex justify-between items-center mb-6">
@@ -648,7 +664,6 @@ export default function App() {
         </div>
       )}
 
-      {/* System Configuration Panel */}
       {activeSettingsPanel === 'config' && (
         <div className="mb-6 bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-2xl animate-in fade-in zoom-in duration-200">
           <div className="flex justify-between items-center mb-6 text-purple-400">
@@ -743,9 +758,8 @@ export default function App() {
         </div>
       )}
 
-      {/* Main Grid: Sidebar + Details */}
+      {}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Fleet List Sidebar */}
         <div className="lg:col-span-4 space-y-4 h-[calc(100vh-250px)] overflow-y-auto pr-2 custom-scrollbar">
           {filteredStations.map(station => (
             <StationCard 
@@ -766,7 +780,6 @@ export default function App() {
           )}
         </div>
 
-        {/* Station Inspector */}
         <div className="lg:col-span-8 bg-slate-900/50 border border-slate-800 rounded-2xl p-6 relative h-[calc(100vh-250px)] overflow-y-auto custom-scrollbar">
           {!selectedStation ? (
             <div className="h-full flex flex-col items-center justify-center text-slate-600 space-y-4 italic">
@@ -824,7 +837,7 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Station Vitals */}
+              {}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <VitalMeter icon={<Cpu />} label="CPU" value={vitals[selectedStation.id]?.cpu} color="blue" smoothing={configOptions.smoothing} />
                 <VitalMeter icon={<Activity />} label="RAM" value={vitals[selectedStation.id]?.ram} color="emerald" smoothing={configOptions.smoothing} />
@@ -832,7 +845,6 @@ export default function App() {
                 <VitalMeter icon={<Thermometer />} label="TEMP" value={vitals[selectedStation.id]?.temp} unit="°C" color="orange" limit={75} smoothing={configOptions.smoothing} />
               </div>
 
-              {/* Hardware Presets */}
               {presets[selectedStation.id]?.length > 0 && (
                 <div className="space-y-4">
                   <div className="flex items-center justify-between border-b border-slate-800 pb-2">
@@ -860,7 +872,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* Watcher Applications */}
               <div className="space-y-4">
                 <div className="flex items-center justify-between border-b border-slate-800 pb-2">
                    <h3 className="text-sm font-black uppercase tracking-widest flex items-center gap-2 text-blue-400/80">
@@ -892,7 +903,7 @@ export default function App() {
                                 )}
                             </div>
                             <p className={`text-[10px] font-mono tracking-tighter uppercase ${hasFailed ? 'text-red-500 font-bold' : 'text-slate-500'}`}>
-                              {hasFailed ? 'Failed to Restart' : isRestarting ? 'Restarting...' : `${app.status} • ${app.uptime}`}
+                              {hasFailed ? 'Failed to Restart' : isRestarting ? 'Restarting...' : `${app.status} ${requiresAdmin ? '(Elevated)' : ''} • ${app.uptime}`}
                             </p>
                           </div>
                         </div>
@@ -913,7 +924,7 @@ export default function App() {
         </div>
       </div>
 
-      {/* Manual Hardware Control Modal */}
+      {}
       {showManualControl && selectedStation && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl shadow-2xl animate-in zoom-in duration-200 overflow-hidden">
@@ -949,20 +960,91 @@ export default function App() {
                       <input type="number" value={controlPayload.midi.velocity} onChange={(e) => setControlPayload({...controlPayload, midi: {...controlPayload.midi, velocity: parseInt(e.target.value)}})} className="w-full bg-slate-900 border border-slate-800 rounded-lg px-4 py-3 text-sm focus:ring-1 focus:ring-blue-500 outline-none" />
                     </div>
                     <div className="flex items-end">
-                      <button onClick={() => handleRemoteAction(selectedStation.id, 'midi', controlPayload.midi)} className="w-full bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-lg font-bold flex items-center justify-center gap-2 transition-all">
+                      <button onClick={() => handleRemoteAction(selectedStation.id, 'midi', controlPayload.midi)} className="w-full bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-lg font-bold flex items-center justify-center gap-2 transition-all shadow-lg shadow-blue-500/20">
                         <Send className="w-4 h-4" /> Trigger
                       </button>
                     </div>
                   </div>
                 )}
-                {/* OSC and Serial forms follow same structure... */}
+
+                {controlTab === 'osc' && (
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6 animate-in fade-in duration-300">
+                    <div className="md:col-span-2">
+                      <label className="block text-[10px] font-black text-slate-500 uppercase mb-2">Path</label>
+                      <input 
+                        type="text" 
+                        value={controlPayload.osc.path} 
+                        onChange={(e) => setControlPayload({...controlPayload, osc: {...controlPayload.osc, path: e.target.value}})}
+                        className="w-full bg-slate-900 border border-slate-800 rounded-lg px-4 py-3 text-sm focus:ring-1 focus:ring-purple-500 outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-black text-slate-500 uppercase mb-2">Port</label>
+                      <input 
+                        type="number" 
+                        value={controlPayload.osc.port} 
+                        onChange={(e) => setControlPayload({...controlPayload, osc: {...controlPayload.osc, port: parseInt(e.target.value)}})}
+                        className="w-full bg-slate-900 border border-slate-800 rounded-lg px-4 py-3 text-sm focus:ring-1 focus:ring-purple-500 outline-none"
+                      />
+                    </div>
+                    <div className="md:col-span-2">
+                      <label className="block text-[10px] font-black text-slate-500 uppercase mb-2">Float Value: {controlPayload.osc.value}</label>
+                      <input 
+                        type="range" min="0" max="1" step="0.01"
+                        value={controlPayload.osc.value} 
+                        onChange={(e) => setControlPayload({...controlPayload, osc: {...controlPayload.osc, value: parseFloat(e.target.value)}})}
+                        className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-purple-500 mt-4"
+                      />
+                    </div>
+                    <div className="flex items-end">
+                      <button 
+                        onClick={() => handleRemoteAction(selectedStation.id, 'osc', controlPayload.osc)}
+                        className="w-full bg-purple-600 hover:bg-purple-500 text-white py-3 rounded-lg font-bold flex items-center justify-center gap-2 transition-all shadow-lg shadow-purple-500/20"
+                      >
+                        <Send className="w-4 h-4" /> Send OSC
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {controlTab === 'serial' && (
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6 animate-in fade-in duration-300">
+                    <div>
+                      <label className="block text-[10px] font-black text-slate-500 uppercase mb-2">Port</label>
+                      <input 
+                        type="text" 
+                        value={controlPayload.serial.port} 
+                        onChange={(e) => setControlPayload({...controlPayload, serial: {...controlPayload.serial, port: e.target.value}})}
+                        className="w-full bg-slate-900 border border-slate-800 rounded-lg px-4 py-3 text-sm focus:ring-1 focus:ring-emerald-500 outline-none"
+                        placeholder="COM1 or /dev/ttyUSB0"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-black text-slate-500 uppercase mb-2">Message</label>
+                      <input 
+                        type="text" 
+                        value={controlPayload.serial.message} 
+                        onChange={(e) => setControlPayload({...controlPayload, serial: {...controlPayload.serial, message: e.target.value}})}
+                        className="w-full bg-slate-900 border border-slate-800 rounded-lg px-4 py-3 text-sm focus:ring-1 focus:ring-emerald-500 outline-none"
+                      />
+                    </div>
+                    <div className="flex items-end">
+                      <button 
+                        onClick={() => handleRemoteAction(selectedStation.id, 'serial', controlPayload.serial)}
+                        className="w-full bg-emerald-600 hover:bg-emerald-500 text-white py-3 rounded-lg font-bold flex items-center justify-center gap-2 transition-all shadow-lg shadow-emerald-500/20"
+                      >
+                        <Send className="w-4 h-4" /> TX Serial
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* Screenshot Viewer */}
+      {}
       {screenshot && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/90 backdrop-blur-md animate-in fade-in duration-300">
           <div className="relative max-w-5xl w-full bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl animate-in zoom-in duration-300">
@@ -979,7 +1061,6 @@ export default function App() {
         </div>
       )}
 
-      {/* Global Notification Toast */}
       {notification && (
         <div className={`fixed bottom-8 left-1/2 -translate-x-1/2 z-[200] px-6 py-3 rounded-2xl border shadow-2xl flex items-center gap-3 animate-in slide-in-from-bottom duration-300 ${
           notification.type === 'success' ? 'bg-emerald-600 border-emerald-400 text-white' :
