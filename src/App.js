@@ -4,7 +4,7 @@ import {
   AlertTriangle, Settings, Search, Thermometer, Zap, Plus, X, Check,
   Wifi, ShieldCheck, Info, Radar, Music, Radio, Terminal, Send, Cpu as Cable,
   Play, Command, Loader2, ShieldAlert, Camera, Heart, LayoutGrid, Settings2,
-  Clock, Gauge, ChevronRight, ToggleLeft, ToggleRight
+  Clock, Gauge, ChevronRight, ToggleLeft, ToggleRight, Download, Trash2, Save
 } from 'lucide-react';
 
 const AGENT_PORT = 5001;
@@ -25,7 +25,8 @@ export default function App() {
   });
 
   const [refreshRate, setRefreshRate] = useState(() => {
-    return parseInt(localStorage.getItem(REFRESH_RATE_KEY)) || 5000;
+    const saved = localStorage.getItem(REFRESH_RATE_KEY);
+    return saved ? parseInt(saved) : 5000;
   });
 
   const [configOptions, setConfigOptions] = useState(() => {
@@ -49,6 +50,7 @@ export default function App() {
   const [isScanning, setIsScanning] = useState(false);
   const [showManualControl, setShowManualControl] = useState(false);
   const [isPulsing, setIsPulsing] = useState(false); 
+  const [notification, setNotification] = useState(null);
 
   const [showSettingsDropdown, setShowSettingsDropdown] = useState(false);
   const [activeSettingsPanel, setActiveSettingsPanel] = useState(null); 
@@ -98,6 +100,11 @@ export default function App() {
       return result;
     });
   }, [adoptedIps]);
+
+  const showToast = (message, type = 'info') => {
+    setNotification({ message, type });
+    setTimeout(() => setNotification(null), 3000);
+  };
 
   const fetchScreenshot = useCallback(async (ip, silent = false) => {
     if (!silent) setLoadingScreenshot(true);
@@ -191,7 +198,6 @@ export default function App() {
     setIsPulsing(true);
     setTimeout(() => setIsPulsing(false), 800); 
 
-    // Handle Auto-Screenshot logic
     if (configOptions.autoScreenshot && selectedStationId) {
       const target = results.find(r => r.ip === selectedStationId && r.status === 'online');
       if (target) {
@@ -205,7 +211,6 @@ export default function App() {
       Object.values(station).some(app => app.status === 'restarting')
     );
     
-    // High-Freq Polling Implementation
     const intervalTime = (configOptions.highFreq && hasActiveRestarts) 
       ? Math.min(2000, refreshRate) 
       : refreshRate;
@@ -215,26 +220,57 @@ export default function App() {
     return () => clearInterval(interval);
   }, [pollAgents, restartingApps, refreshRate, configOptions.highFreq]);
 
-  useEffect(() => {
-    const watchdog = setInterval(() => {
-      const now = Date.now();
-      let changed = false;
-      const nextRestartingApps = { ...restartingApps };
+  const exportFleetLog = () => {
+    const logData = {
+      timestamp: new Date().toISOString(),
+      fleetCount: adoptedIps.length,
+      adoptedIps,
+      stations: stations.map(s => ({
+        name: s.name,
+        ip: s.ip,
+        status: s.status,
+        location: s.location,
+        vitals: vitals[s.ip] || null
+      })),
+      configuration: {
+        refreshRate,
+        configOptions,
+        scanSubnet
+      }
+    };
 
-      Object.entries(nextRestartingApps).forEach(([ip, apps]) => {
-        Object.entries(apps).forEach(([appName, info]) => {
-          if (info.status === 'restarting' && now - info.startTime > RESTART_TIMEOUT_MS) {
-            nextRestartingApps[ip][appName] = { ...info, status: 'failed' };
-            changed = true;
-          }
-        });
-      });
+    const blob = new Blob([JSON.stringify(logData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `fleet_export_${new Date().getTime()}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    showToast("Fleet Log Exported Successfully", "info");
+  };
 
-      if (changed) setRestartingApps(nextRestartingApps);
-    }, 5000);
+  const purgeCache = () => {
+    localStorage.clear();
+    setAdoptedIps(['127.0.0.1']);
+    setScanSubnet('192.168.1');
+    setRefreshRate(5000);
+    setConfigOptions({
+      highFreq: true,
+      smoothing: true,
+      autoScreenshot: false
+    });
+    showToast("Cache Purged. System Reset to Defaults.", "danger");
+  };
 
-    return () => clearInterval(watchdog);
-  }, [restartingApps]);
+  const saveMasterConfig = () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(adoptedIps));
+    localStorage.setItem(SUBNET_KEY, scanSubnet);
+    localStorage.setItem(REFRESH_RATE_KEY, refreshRate.toString());
+    localStorage.setItem(CONFIG_OPTIONS_KEY, JSON.stringify(configOptions));
+    showToast("Master Configuration Saved", "success");
+  };
 
   const scanForNewExhibits = async (isDeepScan = false) => {
     if (isScanning) return;
@@ -276,11 +312,13 @@ export default function App() {
   const adoptStation = (ip) => {
     setAdoptedIps(prev => prev.includes(ip) ? prev : [...prev, ip]);
     setDiscoveredStations(prev => prev.filter(s => s.ip !== ip));
+    showToast(`Station ${ip} Adopted`, "success");
   };
 
   const removeStation = (ip) => {
     setAdoptedIps(prev => prev.filter(item => item !== ip));
     if (selectedStationId === ip) setSelectedStationId(null);
+    showToast(`Station ${ip} Removed`, "info");
   };
 
   const selectedStation = useMemo(() => 
@@ -322,11 +360,13 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
+      showToast(`${action.toUpperCase()} Sent to ${targetStation.name}`, "info");
       if (action === 'reboot' || action === 'restart-app') {
         setTimeout(pollAgents, 1000);
       }
     } catch (err) {
       console.error("Action failed", err);
+      showToast(`Action ${action} Failed`, "danger");
     } finally {
       setIsRefreshing(false);
     }
@@ -413,7 +453,7 @@ export default function App() {
                   </button>
                 </div>
                 <div className="p-3 bg-slate-950/50 border-t border-slate-800 flex items-center justify-between">
-                  <span className="text-[10px] font-black text-slate-500 uppercase">Version 2.4.0</span>
+                  <span className="text-[10px] font-black text-slate-500 uppercase">Version 2.5.0</span>
                   <button 
                     onClick={() => { setActiveSettingsPanel(null); setShowSettingsDropdown(false); }}
                     className="text-[10px] text-blue-500 font-black uppercase hover:text-blue-400"
@@ -513,6 +553,7 @@ export default function App() {
         </div>
       )}
 
+      {}
       {activeSettingsPanel === 'config' && (
         <div className="mb-6 bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-2xl animate-in fade-in zoom-in duration-200">
           <div className="flex justify-between items-center mb-6 text-purple-400">
@@ -573,9 +614,15 @@ export default function App() {
                 <span className="text-xs font-black uppercase tracking-widest">Security</span>
               </div>
               <div className="space-y-2">
-                 <button className="w-full py-2 bg-slate-900 border border-slate-800 rounded text-[10px] font-bold uppercase hover:bg-slate-800 text-slate-400">Export Fleet Log</button>
-                 <button className="w-full py-2 bg-slate-900 border border-slate-800 rounded text-[10px] font-bold uppercase hover:bg-red-500/10 hover:text-red-400 hover:border-red-500/20">Purge Cached Tokens</button>
-                 <button className="w-full py-2 bg-blue-600 text-white rounded text-[10px] font-bold uppercase">Save Master config</button>
+                 <button onClick={exportFleetLog} className="w-full py-2 bg-slate-900 border border-slate-800 rounded text-[10px] font-bold uppercase hover:bg-slate-800 text-slate-400 flex items-center justify-center gap-2">
+                   <Download className="w-3 h-3" /> Export Fleet Log
+                 </button>
+                 <button onClick={purgeCache} className="w-full py-2 bg-slate-900 border border-slate-800 rounded text-[10px] font-bold uppercase hover:bg-red-500/10 hover:text-red-400 hover:border-red-500/20 flex items-center justify-center gap-2">
+                   <Trash2 className="w-3 h-3" /> Purge Cached Tokens
+                 </button>
+                 <button onClick={saveMasterConfig} className="w-full py-2 bg-blue-600 text-white rounded text-[10px] font-bold uppercase flex items-center justify-center gap-2">
+                   <Save className="w-3 h-3" /> Save Master config
+                 </button>
               </div>
             </div>
           </div>
@@ -747,7 +794,7 @@ export default function App() {
         </div>
       </div>
 
-      { }
+      {}
       {showManualControl && selectedStation && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl shadow-2xl animate-in zoom-in duration-200 overflow-hidden">
@@ -937,6 +984,18 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* Global Notification Toast */}
+      {notification && (
+        <div className={`fixed bottom-8 left-1/2 -translate-x-1/2 z-[200] px-6 py-3 rounded-2xl border shadow-2xl flex items-center gap-3 animate-in slide-in-from-bottom duration-300 ${
+          notification.type === 'success' ? 'bg-emerald-600 border-emerald-400 text-white' :
+          notification.type === 'danger' ? 'bg-red-600 border-red-400 text-white' :
+          'bg-blue-600 border-blue-400 text-white'
+        }`}>
+          {notification.type === 'success' ? <Check className="w-5 h-5" /> : notification.type === 'danger' ? <AlertTriangle className="w-5 h-5" /> : <Info className="w-5 h-5" />}
+          <span className="font-bold text-sm">{notification.message}</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -999,7 +1058,6 @@ function VitalMeter({ icon, label, value = 0, unit = '%', color, limit = 90, smo
         <span className="text-3xl font-black tabular-nums tracking-tighter">{Math.round(value)}</span>
         <span className="text-xs font-bold opacity-40 uppercase">{unit}</span>
       </div>
-      {/* Visual smoothing represented by a small bar at the bottom of the meter */}
       <div className="mt-2 h-1 bg-white/5 rounded-full overflow-hidden">
          <div 
           className={`h-full ${smoothing ? 'transition-all duration-700' : ''} bg-current opacity-30`}
