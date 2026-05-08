@@ -5,18 +5,55 @@ import os
 import json
 import threading
 import ctypes
+import sys
+import subprocess
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from flask import Flask, jsonify, request
 from flask_cors import CORS
+
+# --- CONSTANTS ---
+CREATE_NO_WINDOW = 0x08000000
+
+# --- SUBPROCESS MONKEY PATCH ---
+# Forces the CREATE_NO_WINDOW flag onto every subprocess call made by the app or libraries.
+# This prevents flashing CMD windows when checking GPU stats or restarting apps.
+if platform.system() == "Windows":
+    _original_popen = subprocess.Popen
+    def _patched_popen(*args, **kwargs):
+        if 'creationflags' not in kwargs:
+            kwargs['creationflags'] = CREATE_NO_WINDOW
+        else:
+            kwargs['creationflags'] |= CREATE_NO_WINDOW
+        return _original_popen(*args, **kwargs)
+    subprocess.Popen = _patched_popen
+
+# --- SYSTEM TRAY & ICON LIBRARIES ---
+try:
+    from PIL import Image, ImageDraw, ImageTk
+    import pystray
+    HAS_TRAY = True
+except ImportError:
+    HAS_TRAY = False
+
+# --- CONSOLE HIDING LOGIC ---
+def hide_console():
+    """
+    Hides the console window if running on Windows.
+    """
+    if platform.system() == "Windows":
+        whnd = ctypes.windll.kernel32.GetConsoleWindow()
+        if whnd != 0:
+            ctypes.windll.user32.ShowWindow(whnd, 0)
+
+hide_console()
 
 # --- HARDWARE CONTROL LIBRARIES ---
 try:
     import pygame.midi
     pygame.midi.init()
     HAS_MIDI = True
-except Exception as e:
-    print(f"MIDI Initialization Error: {e}")
+except Exception:
     HAS_MIDI = False
 
 try:
@@ -70,30 +107,19 @@ config_data = load_config()
 # --- Utility Functions ---
 
 def check_requires_admin(exe_path):
-    """
-    Checks if a Windows executable requires admin privileges by looking for 
-    specific requestedExecutionLevel strings in its binary manifest using raw bytes.
-    """
     if not exe_path or not os.path.exists(exe_path) or not exe_path.lower().endswith('.exe'):
         return False
     try:
-        # Search for these byte patterns to avoid encoding issues with binary files
         admin_patterns = [b'level="requireAdministrator"', b'level="highestAvailable"', b'requireAdministrator']
-        
         with open(exe_path, 'rb') as f:
             f.seek(0, os.SEEK_END)
             size = f.tell()
-            
-            # Manifests are usually at the beginning (resource section) or near the end.
-            # We read the first 1MB and the last 1MB for efficiency.
             f.seek(0)
             head = f.read(min(size, 1024 * 1024))
-            
             tail = b""
             if size > 1024 * 1024:
                 f.seek(size - 1024 * 1024)
                 tail = f.read()
-            
             combined_content = head + tail
             for pattern in admin_patterns:
                 if pattern in combined_content:
@@ -106,7 +132,6 @@ def check_requires_admin(exe_path):
 app = Flask(__name__)
 CORS(app)
 
-# Persistent MIDI Storage
 midi_output_obj = None
 midi_current_idx = -2
 midi_lock = threading.Lock()
@@ -174,17 +199,13 @@ def health():
         "presets": config_data.get("presets", [])
     })
 
-# --- HARDWARE CONTROL EXECUTION ---
-
 def execute_midi(data):
     global midi_output_obj, midi_current_idx
     if not HAS_MIDI: return jsonify({"error": "MIDI not available"}), 500
-    
     with midi_lock:
         idx = config_data.get('midi_device_index', -1)
         if idx == -1: idx = pygame.midi.get_default_output_id()
         if idx == -1: return jsonify({"error": "No MIDI output device detected"}), 404
-
         try:
             if midi_output_obj is None or idx != midi_current_idx:
                 if midi_output_obj:
@@ -192,7 +213,6 @@ def execute_midi(data):
                     except: pass
                 midi_output_obj = pygame.midi.Output(idx)
                 midi_current_idx = idx
-            
             midi_output_obj.note_on(int(data['note']), int(data['velocity']), int(data['channel']) - 1)
             time.sleep(0.1)
             midi_output_obj.note_off(int(data['note']), int(data['velocity']), int(data['channel']) - 1)
@@ -243,7 +263,10 @@ def trigger_preset():
 
 @app.route('/action/reboot', methods=['POST'])
 def reboot():
-    os.system("shutdown /r /t 1") if platform.system() == "Windows" else os.system("sudo reboot")
+    if platform.system() == "Windows":
+        subprocess.Popen("shutdown /r /t 1")
+    else:
+        os.system("sudo reboot")
     return jsonify({"message": "Reboot command sent"})
 
 @app.route('/action/restart-app', methods=['POST'])
@@ -251,22 +274,19 @@ def restart_app():
     data = request.json
     app_name = data.get('name')
     full_path = next((p for p in config_data["watched_apps"] if os.path.basename(p) == app_name), None)
-    
     for proc in psutil.process_iter(['name']):
         try:
             if proc.info['name'] == app_name: proc.kill()
         except: continue
-        
     if full_path and os.path.exists(full_path):
         try:
             if check_requires_admin(full_path):
                 ctypes.windll.shell32.ShellExecuteW(None, "runas", full_path, None, None, 1)
             else:
-                os.startfile(full_path)
+                subprocess.Popen(full_path)
             return jsonify({"message": f"Restarting {app_name}"})
         except Exception as e:
             return jsonify({"error": f"Failed to start: {str(e)}"}), 500
-            
     return jsonify({"error": "Path not found"}), 404
 
 # --- GUI Application ---
@@ -277,6 +297,18 @@ class MonitorGUI:
         self.root.geometry("600x850")
         self.root.configure(bg="#0f172a")
         
+        # System Tray & Title Bar Icon Integration
+        self.root.protocol('WM_DELETE_WINDOW', self.minimize_to_tray)
+        self.icon = None
+        if HAS_TRAY:
+            # Set Title Bar Icon
+            self.app_icon_img = self.create_icon_image(32, 32)
+            self.tk_icon = ImageTk.PhotoImage(self.app_icon_img)
+            self.root.iconphoto(False, self.tk_icon)
+            
+            # Create Tray Icon
+            self.create_tray_icon()
+
         self.last_midi_list = []
         self.style = ttk.Style()
         self.style.theme_use('clam')
@@ -348,6 +380,42 @@ class MonitorGUI:
         self.refresh_list()
         self.refresh_presets()
 
+    def create_icon_image(self, width, height):
+        """Generates a custom dashboard-style icon."""
+        image = Image.new('RGBA', (width, height), (0, 0, 0, 0))
+        dc = ImageDraw.Draw(image)
+        s = width / 64  # Scaling factor
+        # Outer ring
+        dc.ellipse((4*s, 4*s, 60*s, 60*s), fill=(30, 41, 59), outline=(59, 130, 246), width=max(1, int(4*s)))
+        # Inner circle
+        dc.ellipse((20*s, 20*s, 44*s, 44*s), fill=(59, 130, 246))
+        # pulse line
+        dc.line([(16*s, 32*s), (24*s, 32*s), (28*s, 16*s), (36*s, 48*s), (40*s, 32*s), (48*s, 32*s)], fill=(255, 255, 255), width=max(1, int(3*s)))
+        return image
+
+    def create_tray_icon(self):
+        image = self.create_icon_image(64, 64)
+        menu = pystray.Menu(
+            pystray.MenuItem("Restore Window", self.show_window),
+            pystray.MenuItem("Exit Agent", self.quit_all)
+        )
+        self.icon = pystray.Icon("exhibit_monitor", image, "Exhibit Monitor Agent", menu)
+        threading.Thread(target=self.icon.run, daemon=True).start()
+
+    def minimize_to_tray(self):
+        self.root.withdraw()
+        if not HAS_TRAY:
+            self.quit_all()
+
+    def show_window(self):
+        self.root.after(0, self.root.deiconify)
+
+    def quit_all(self):
+        if self.icon:
+            self.icon.stop()
+        self.root.destroy()
+        os._exit(0)
+
     def update_midi_devices(self):
         if not HAS_MIDI: return
         try:
@@ -364,7 +432,7 @@ class MonitorGUI:
                 self.midi_cb['values'] = midi_devices
                 self.midi_cb.set(cur if cur in midi_devices else midi_devices[0])
                 self.last_midi_list = midi_devices
-        except: pass
+        except Exception: pass
         self.root.after(3000, self.update_midi_devices)
 
     def create_section(self, parent, title):
@@ -385,13 +453,12 @@ class MonitorGUI:
         midi_val = self.midi_cb.get()
         config_data["midi_device_index"] = int(midi_val.split(":")[0]) if ":" in midi_val else -1
         save_config(config_data)
-        self.refresh_list() # Re-check admin status visually
+        self.refresh_list()
         messagebox.showinfo("Config Saved", "Settings updated successfully.")
 
     def refresh_list(self):
         self.app_list.delete(0, tk.END)
         for p in config_data["watched_apps"]:
-            # Improved raw-byte search to detect elevation requirements
             is_admin = check_requires_admin(p)
             tag = " [ADMIN]" if is_admin else ""
             self.app_list.insert(tk.END, f" {os.path.basename(p)}{tag}")
@@ -444,8 +511,11 @@ class MonitorGUI:
 
         tk.Button(dialog, text="SAVE PRESET", command=save, bg="#10b981", fg="white", font=("Segoe UI", 9, "bold"), borderwidth=0, pady=8).pack(pady=20, padx=20, fill=tk.X)
 
-def run_flask(): app.run(host='0.0.0.0', port=5001, debug=False, use_reloader=False)
+def run_flask(): 
+    app.run(host='0.0.0.0', port=5001, debug=False, use_reloader=False)
 
 if __name__ == '__main__':
     threading.Thread(target=run_flask, daemon=True).start()
-    root = tk.Tk(); gui = MonitorGUI(root); root.mainloop()
+    root = tk.Tk()
+    gui = MonitorGUI(root)
+    root.mainloop()
