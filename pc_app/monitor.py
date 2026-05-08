@@ -8,17 +8,29 @@ import ctypes
 import sys
 import subprocess
 import tkinter as tk
+import base64
+from io import BytesIO
 from tkinter import filedialog, messagebox, ttk
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 
-# --- CONSTANTS ---
-CREATE_NO_WINDOW = 0x08000000
+try:
+    import mss
+    from PIL import Image, ImageDraw, ImageTk
+    HAS_SCREEN_CAPTURE = True
+except ImportError:
+    HAS_SCREEN_CAPTURE = False
 
-# --- SUBPROCESS MONKEY PATCH ---
+try:
+    import pystray
+    HAS_TRAY = True
+except ImportError:
+    HAS_TRAY = False
+
 # Forces the CREATE_NO_WINDOW flag onto every subprocess call made by the app or libraries.
 # This prevents flashing CMD windows when checking GPU stats or restarting apps.
 if platform.system() == "Windows":
+    CREATE_NO_WINDOW = 0x08000000
     _original_popen = subprocess.Popen
     def _patched_popen(*args, **kwargs):
         if 'creationflags' not in kwargs:
@@ -28,19 +40,8 @@ if platform.system() == "Windows":
         return _original_popen(*args, **kwargs)
     subprocess.Popen = _patched_popen
 
-# --- SYSTEM TRAY & ICON LIBRARIES ---
-try:
-    from PIL import Image, ImageDraw, ImageTk
-    import pystray
-    HAS_TRAY = True
-except ImportError:
-    HAS_TRAY = False
-
-# --- CONSOLE HIDING LOGIC ---
 def hide_console():
-    """
-    Hides the console window if running on Windows.
-    """
+    """Hides the console window if running on Windows."""
     if platform.system() == "Windows":
         whnd = ctypes.windll.kernel32.GetConsoleWindow()
         if whnd != 0:
@@ -48,7 +49,6 @@ def hide_console():
 
 hide_console()
 
-# --- HARDWARE CONTROL LIBRARIES ---
 try:
     import pygame.midi
     pygame.midi.init()
@@ -74,7 +74,6 @@ try:
 except ImportError:
     HAS_GPUTIL = False
 
-# --- Persistence Logic ---
 CONFIG_FILE = "monitor_config.json"
 
 def load_config():
@@ -104,8 +103,6 @@ def save_config(config):
 
 config_data = load_config()
 
-# --- Utility Functions ---
-
 def check_requires_admin(exe_path):
     if not exe_path or not os.path.exists(exe_path) or not exe_path.lower().endswith('.exe'):
         return False
@@ -128,7 +125,6 @@ def check_requires_admin(exe_path):
         pass
     return False
 
-# --- Flask API Setup ---
 app = Flask(__name__)
 CORS(app)
 
@@ -198,6 +194,31 @@ def health():
         "apps": app_status,
         "presets": config_data.get("presets", [])
     })
+
+@app.route('/action/screenshot', methods=['GET'])
+def get_screenshot():
+    if not HAS_SCREEN_CAPTURE:
+        return jsonify({"error": "mss or Pillow libraries not installed"}), 500
+    try:
+        with mss.mss() as sct:
+            # Capture the primary monitor
+            monitor = sct.monitors[1]
+            sct_img = sct.grab(monitor)
+            
+            # Convert to PIL Image for compression (mss uses BGRA format)
+            img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
+            
+            # Resize for faster transmission (half-res for efficiency)
+            img.thumbnail((960, 540), Image.Resampling.LANCZOS)
+            
+            # Save to buffer as JPEG with 60% quality
+            buffer = BytesIO()
+            img.save(buffer, format="JPEG", quality=60)
+            img_str = base64.b64encode(buffer.getvalue()).decode()
+            
+            return jsonify({"image": img_str})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 def execute_midi(data):
     global midi_output_obj, midi_current_idx
@@ -289,7 +310,6 @@ def restart_app():
             return jsonify({"error": f"Failed to start: {str(e)}"}), 500
     return jsonify({"error": "Path not found"}), 404
 
-# --- GUI Application ---
 class MonitorGUI:
     def __init__(self, root):
         self.root = root
@@ -385,11 +405,8 @@ class MonitorGUI:
         image = Image.new('RGBA', (width, height), (0, 0, 0, 0))
         dc = ImageDraw.Draw(image)
         s = width / 64  # Scaling factor
-        # Outer ring
         dc.ellipse((4*s, 4*s, 60*s, 60*s), fill=(30, 41, 59), outline=(59, 130, 246), width=max(1, int(4*s)))
-        # Inner circle
         dc.ellipse((20*s, 20*s, 44*s, 44*s), fill=(59, 130, 246))
-        # pulse line
         dc.line([(16*s, 32*s), (24*s, 32*s), (28*s, 16*s), (36*s, 48*s), (40*s, 32*s), (48*s, 32*s)], fill=(255, 255, 255), width=max(1, int(3*s)))
         return image
 
@@ -515,7 +532,10 @@ def run_flask():
     app.run(host='0.0.0.0', port=5001, debug=False, use_reloader=False)
 
 if __name__ == '__main__':
+    # Start Flask API in a background thread
     threading.Thread(target=run_flask, daemon=True).start()
+    
+    # Start the Tkinter UI
     root = tk.Tk()
     gui = MonitorGUI(root)
     root.mainloop()

@@ -3,7 +3,7 @@ import {
   Monitor, Cpu, HardDrive, Activity, RefreshCw, Power, 
   AlertTriangle, Settings, Search, Thermometer, Zap, Plus, X, Check,
   Wifi, ShieldCheck, Info, Radar, Music, Radio, Terminal, Send, Cpu as Cable,
-  Play, Command, Loader2, ShieldAlert
+  Play, Command, Loader2, ShieldAlert, Camera
 } from 'lucide-react';
 
 const AGENT_PORT = 5001;
@@ -35,6 +35,9 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
   const [showManualControl, setShowManualControl] = useState(false);
+
+  const [screenshot, setScreenshot] = useState(null);
+  const [loadingScreenshot, setLoadingScreenshot] = useState(false);
   
   // Track apps currently being restarted: { [ip]: { [appName]: { startTime, status } } }
   const [restartingApps, setRestartingApps] = useState({});
@@ -162,13 +165,10 @@ export default function App() {
 
   // Handle Polling Intervals dynamically
   useEffect(() => {
-    // Check for any active restarts to decide frequency
     const hasActiveRestarts = Object.values(restartingApps).some(station => 
       Object.values(station).some(app => app.status === 'restarting')
     );
-    
     const intervalTime = hasActiveRestarts ? 2000 : 5000;
-    
     pollAgents();
     const interval = setInterval(pollAgents, intervalTime);
     return () => clearInterval(interval);
@@ -242,6 +242,23 @@ export default function App() {
   const removeStation = (ip) => {
     setAdoptedIps(prev => prev.filter(item => item !== ip));
     if (selectedStationId === ip) setSelectedStationId(null);
+  };
+
+  const fetchScreenshot = async (ip) => {
+    setLoadingScreenshot(true);
+    try {
+      const response = await fetch(`http://${ip}:${AGENT_PORT}/action/screenshot`);
+      const data = await response.json();
+      if (data.image) {
+        setScreenshot(`data:image/jpeg;base64,${data.image}`);
+      } else if (data.error) {
+        console.error("Agent error:", data.error);
+      }
+    } catch (err) {
+      console.error("Failed to fetch screenshot", err);
+    } finally {
+      setLoadingScreenshot(false);
+    }
   };
 
   const selectedStation = useMemo(() => 
@@ -326,7 +343,7 @@ export default function App() {
         </div>
       </header>
 
-      {/* Discovery Banner */}
+      {}
       {discoveredStations.length > 0 && (
         <div className="mb-6 animate-in slide-in-from-top duration-500">
           <div className="bg-blue-600/20 border border-blue-500/50 rounded-xl p-4 flex flex-col md:flex-row items-center justify-between gap-4">
@@ -430,6 +447,7 @@ export default function App() {
         </div>
       )}
 
+      {/* Main Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Sidebar */}
         <div className="lg:col-span-4 space-y-4 h-[calc(100vh-200px)] overflow-y-auto pr-2 custom-scrollbar">
@@ -475,12 +493,21 @@ export default function App() {
                   </div>
                 </div>
                 
+                {}
                 <div className="flex flex-wrap gap-2">
                    <button 
                     onClick={() => removeStation(selectedStation.ip)}
                     className="px-3 py-2 bg-slate-900 text-slate-500 border border-slate-800 hover:border-red-900/50 hover:text-red-400 rounded-lg text-[11px] font-bold uppercase transition-all"
                   >
                     Un-Adopt
+                  </button>
+                  <button 
+                    onClick={() => fetchScreenshot(selectedStation.ip)}
+                    disabled={loadingScreenshot || selectedStation.status === 'offline'}
+                    className="flex items-center gap-2 px-3 py-2 bg-emerald-600/10 text-emerald-400 border border-emerald-500/20 hover:bg-emerald-600 hover:text-white rounded-lg text-[11px] font-bold uppercase transition-all disabled:opacity-20 shadow-lg shadow-emerald-500/5"
+                  >
+                    {loadingScreenshot ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Camera className="w-3.5 h-3.5" />}
+                    Capture View
                   </button>
                   <button 
                     onClick={() => setShowManualControl(true)}
@@ -735,6 +762,46 @@ export default function App() {
             
             <div className="p-4 bg-slate-900 text-[10px] text-slate-500 border-t border-slate-800 text-center uppercase tracking-widest font-bold">
               Targeting: {selectedStation.ip}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {}
+      {screenshot && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/90 backdrop-blur-md animate-in fade-in duration-300">
+          <div className="relative max-w-5xl w-full bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl animate-in zoom-in duration-300">
+            <div className="flex items-center justify-between p-4 border-b border-slate-800 bg-slate-900/50">
+              <div className="flex items-center gap-2 text-emerald-400">
+                <Camera className="w-4 h-4" />
+                <span className="text-sm font-bold uppercase tracking-widest">Exhibit Live Frame • {selectedStation?.name}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button 
+                  onClick={() => fetchScreenshot(selectedStation.ip)}
+                  className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg transition-colors"
+                  title="Refresh Screenshot"
+                >
+                  <RefreshCw className={`w-4 h-4 ${loadingScreenshot ? 'animate-spin' : ''}`} />
+                </button>
+                <button 
+                  onClick={() => setScreenshot(null)}
+                  className="p-2 bg-slate-800 hover:bg-red-600 text-slate-300 hover:text-white rounded-lg transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+            <div className="aspect-video bg-black flex items-center justify-center overflow-hidden">
+              <img 
+                src={screenshot} 
+                alt="Exhibit Screenshot" 
+                className="max-w-full max-h-full object-contain shadow-2xl"
+              />
+            </div>
+            <div className="p-3 bg-slate-950 border-t border-slate-800 flex justify-between items-center text-[10px] text-slate-500 font-mono uppercase">
+              <span>Capture successful from {selectedStation?.ip}</span>
+              <span>{new Date().toLocaleTimeString()}</span>
             </div>
           </div>
         </div>
