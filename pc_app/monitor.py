@@ -31,13 +31,14 @@ except ImportError:
 if platform.system() == "Windows":
     CREATE_NO_WINDOW = 0x08000000
     _original_popen = subprocess.Popen
-    def _patched_popen(*args, **kwargs):
-        if 'creationflags' not in kwargs:
-            kwargs['creationflags'] = CREATE_NO_WINDOW
-        else:
-            kwargs['creationflags'] |= CREATE_NO_WINDOW
-        return _original_popen(*args, **kwargs)
-    subprocess.Popen = _patched_popen
+
+    class PatchedPopen(_original_popen):
+        def __init__(self, *args, **kwargs):
+            creationflags = kwargs.get('creationflags', 0)
+            kwargs['creationflags'] = creationflags | CREATE_NO_WINDOW
+            super().__init__(*args, **kwargs)
+
+    subprocess.Popen = PatchedPopen
 
 def hide_console():
     if platform.system() == "Windows":
