@@ -473,8 +473,8 @@ export default function App() {
             <ShieldCheck className="w-8 h-8 text-white" />
           </div>
           <div>
-            <h1 className="text-3xl font-black tracking-tighter text-white">MUSEUM<span className="text-blue-500">MONITOR</span></h1>
-            <p className="text-xs font-bold text-slate-500 uppercase tracking-widest text-nowrap">Exhibit Fleet Command</p>
+            <h1 className="text-3xl font-black tracking-tighter text-white">EXHIBITS<span className="text-blue-500">+</span></h1>
+            <p className="text-xs font-bold text-slate-500 uppercase tracking-widest text-nowrap">Exhibit Fleet Monitor & Control Center</p>
           </div>
         </div>
 
