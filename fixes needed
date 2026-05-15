@@ -1,2 +1,31 @@
 192.168.1.76 - - [15/May/2026 00:38:46] "POST /action/control/midi HTTP/1.1" 500 - -> Sometimes the midi fails
 CPU usage is not being displayed in the maindashboard 
+
+//
+Exception in Tkinter callback
+Traceback (most recent call last):
+  File "C:\Users\keira\AppData\Local\Python\pythoncore-3.12-64\Lib\tkinter\__init__.py", line 1968, in __call__
+    return self.func(*args)
+           ^^^^^^^^^^^^^^^^
+  File "c:\Users\keira\OneDrive\Desktop\GitHub\exhibit-monitor\pc_app\monitor.py", line 626, in save_all_config
+    save_config(config_data)
+  File "c:\Users\keira\OneDrive\Desktop\GitHub\exhibit-monitor\pc_app\monitor.py", line 112, in save_config
+    json.dump(config, f, indent=4)
+  File "C:\Users\keira\AppData\Local\Python\pythoncore-3.12-64\Lib\json\__init__.py", line 179, in dump
+    for chunk in iterable:
+                 ^^^^^^^^
+  File "C:\Users\keira\AppData\Local\Python\pythoncore-3.12-64\Lib\json\encoder.py", line 432, in _iterencode
+    yield from _iterencode_dict(o, _current_indent_level)
+  File "C:\Users\keira\AppData\Local\Python\pythoncore-3.12-64\Lib\json\encoder.py", line 406, in _iterencode_dict
+    yield from chunks
+  File "C:\Users\keira\AppData\Local\Python\pythoncore-3.12-64\Lib\json\encoder.py", line 326, in _iterencode_list
+    yield from chunks
+  File "C:\Users\keira\AppData\Local\Python\pythoncore-3.12-64\Lib\json\encoder.py", line 406, in _iterencode_dict
+    yield from chunks
+  File "C:\Users\keira\AppData\Local\Python\pythoncore-3.12-64\Lib\json\encoder.py", line 439, in _iterencode
+    o = _default(o)
+        ^^^^^^^^^^^
+  File "C:\Users\keira\AppData\Local\Python\pythoncore-3.12-64\Lib\json\encoder.py", line 180, in default
+    raise TypeError(f'Object of type {o.__class__.__name__} '
+TypeError: Object of type BooleanVar is not JSON serializable
+// -> Getting this error when updating the time in the pc app
