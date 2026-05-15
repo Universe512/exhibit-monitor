@@ -8,3 +8,4 @@ monitor.spec
 fleet_config.json
 .gitignore
 fleet_uptime.log
+monitor_config.json

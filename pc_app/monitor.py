@@ -9,6 +9,7 @@ import sys
 import subprocess
 import tkinter as tk
 import base64
+from datetime import datetime
 from io import BytesIO
 from tkinter import filedialog, messagebox, ttk
 from flask import Flask, jsonify, request
@@ -77,13 +78,16 @@ CONFIG_FILE = "monitor_config.json"
 
 def load_config():
     defaults = {
-        "watched_apps": [],
+        "watched_apps": [], # Now stores list of dicts: {"path": str, "autolaunch": bool}
         "display_name": platform.node(),
         "location": "Gallery Main",
         "midi_device_index": -1,
         "serial_port": "COM1",
         "serial_baud": 9600,
-        "presets": []
+        "presets": [],
+        "autolaunch_time": "09:00",
+        "shutdown_time": "22:00",
+        "automation_enabled": True
     }
     if os.path.exists(CONFIG_FILE):
         try:
@@ -92,6 +96,16 @@ def load_config():
                 for key, val in defaults.items():
                     if key not in config:
                         config[key] = val
+                
+                # Migration: Convert old list of strings to list of dicts
+                migrated_apps = []
+                for app in config["watched_apps"]:
+                    if isinstance(app, str):
+                        migrated_apps.append({"path": app, "autolaunch": True})
+                    else:
+                        migrated_apps.append(app)
+                config["watched_apps"] = migrated_apps
+                
                 return config
         except: pass
     return defaults
@@ -124,6 +138,54 @@ def check_requires_admin(exe_path):
         pass
     return False
 
+# --- SCHEDULER LOGIC ---
+last_trigger_min = ""
+
+def scheduler_loop():
+    global last_trigger_min
+    while True:
+        if not config_data.get("automation_enabled", True):
+            time.sleep(30)
+            continue
+
+        now = datetime.now().strftime("%H:%M")
+        if now != last_trigger_min:
+            # Check Shutdown Schedule
+            st = config_data.get("shutdown_time")
+            if st and st == now:
+                print(f"[{now}] TRIGGER: Scheduled Auto-Shutdown initiated.")
+                if platform.system() == "Windows":
+                    subprocess.Popen("shutdown /s /t 60") # 60s warning
+                else:
+                    os.system("sudo shutdown -h now")
+            
+            # Check Autolaunch Schedule
+            at = config_data.get("autolaunch_time")
+            if at and at == now:
+                print(f"[{now}] TRIGGER: Scheduled Autolaunch for watched apps.")
+                running_names = [p.info['name'].lower() for p in psutil.process_iter(['name'])]
+                
+                for app_entry in config_data.get("watched_apps", []):
+                    full_path = app_entry.get("path")
+                    should_launch = app_entry.get("autolaunch", True)
+                    
+                    if not should_launch or not full_path:
+                        continue
+                        
+                    app_name = os.path.basename(full_path).lower()
+                    if app_name not in running_names and os.path.exists(full_path):
+                        try:
+                            if check_requires_admin(full_path):
+                                ctypes.windll.shell32.ShellExecuteW(None, "runas", full_path, None, None, 1)
+                            else:
+                                subprocess.Popen(full_path)
+                            print(f"Launched: {app_name}")
+                        except Exception as e:
+                            print(f"Autolaunch Error: {str(e)}")
+            
+            last_trigger_min = now
+        time.sleep(20)
+
 app = Flask(__name__)
 CORS(app)
 
@@ -152,7 +214,9 @@ def get_system_temp():
 @app.route('/health', methods=['GET'])
 def health():
     app_status = []
-    watched_names = [os.path.basename(path) for path in config_data["watched_apps"]]
+    watched_paths = [entry["path"] for entry in config_data["watched_apps"]]
+    watched_names = [os.path.basename(path) for path in watched_paths]
+    
     running_procs = {}
     for p in psutil.process_iter(['name', 'create_time']):
         try:
@@ -160,7 +224,8 @@ def health():
             if name in watched_names: running_procs[name] = p.info
         except: continue
     
-    for full_path in config_data["watched_apps"]:
+    for app_entry in config_data["watched_apps"]:
+        full_path = app_entry["path"]
         app_name = os.path.basename(full_path)
         is_running = app_name in running_procs
         uptime = "0m"
@@ -175,6 +240,7 @@ def health():
             "path": full_path, 
             "status": "running" if is_running else "stopped", 
             "uptime": uptime,
+            "autolaunch": app_entry.get("autolaunch", True),
             "requires_admin": check_requires_admin(full_path)
         })
 
@@ -191,8 +257,22 @@ def health():
             "temp": get_system_temp()
         },
         "apps": app_status,
-        "presets": config_data.get("presets", [])
+        "presets": config_data.get("presets", []),
+        "automation": {
+            "autolaunch": config_data.get("autolaunch_time"),
+            "shutdown": config_data.get("shutdown_time"),
+            "enabled": config_data.get("automation_enabled")
+        }
     })
+
+@app.route('/action/schedule', methods=['POST'])
+def update_schedule():
+    data = request.json
+    if "autolaunch" in data: config_data["autolaunch_time"] = data["autolaunch"]
+    if "shutdown" in data: config_data["shutdown_time"] = data["shutdown"]
+    if "enabled" in data: config_data["automation_enabled"] = data["enabled"]
+    save_config(config_data)
+    return jsonify({"message": "Schedule updated on agent."})
 
 @app.route('/action/screenshot', methods=['GET'])
 def get_screenshot():
@@ -200,22 +280,15 @@ def get_screenshot():
         return jsonify({"error": "mss or Pillow libraries not installed"}), 500
     try:
         with mss.mss() as sct:
-            # Capture the primary monitor
             monitor = sct.monitors[1]
             sct_img = sct.grab(monitor)
-            
-            # Convert to PIL Image
             img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
             
-            # --- RESOLUTION FIX ---
-            # Set target width (e.g., 1920 for 1080p). 
-            # Commenting out thumbnail() entirely will send the native resolution.
             target_width = 1600 
             w_percent = (target_width / float(img.size[0]))
             h_size = int((float(img.size[1]) * float(w_percent)))
             img = img.resize((target_width, h_size), Image.Resampling.LANCZOS)
             
-            # Save to buffer as JPEG with 85% quality (much cleaner than 60)
             buffer = BytesIO()
             img.save(buffer, format="JPEG", quality=85, optimize=True)
             img_str = base64.b64encode(buffer.getvalue()).decode()
@@ -298,7 +371,7 @@ def reboot():
 def restart_app():
     data = request.json
     app_name = data.get('name')
-    full_path = next((p for p in config_data["watched_apps"] if os.path.basename(p) == app_name), None)
+    full_path = next((p["path"] for p in config_data["watched_apps"] if os.path.basename(p["path"]) == app_name), None)
     for proc in psutil.process_iter(['name']):
         try:
             if proc.info['name'] == app_name: proc.kill()
@@ -318,7 +391,7 @@ class MonitorGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("Exhibit Monitor Agent")
-        self.root.geometry("600x850")
+        self.root.geometry("650x950")
         self.root.configure(bg="#0f172a")
         
         self.root.protocol('WM_DELETE_WINDOW', self.minimize_to_tray)
@@ -333,25 +406,35 @@ class MonitorGUI:
         self.style = ttk.Style()
         self.style.theme_use('clam')
         self.style.configure("TCombobox", fieldbackground="#1e293b", background="#334155", foreground="white", arrowcolor="white")
+        self.style.configure("TSpinbox", fieldbackground="#0f172a", background="#1e293b", foreground="white", arrowcolor="white")
         
-        header = tk.Frame(root, bg="#1e293b", height=80)
+        header = tk.Frame(root, bg="#1e293b", height=100)
         header.pack(fill=tk.X)
         header.pack_propagate(False)
         
         title_label = tk.Label(header, text="AGENT SETTINGS", bg="#1e293b", fg="#3b82f6", font=("Segoe UI", 16, "bold"))
         title_label.pack(side=tk.LEFT, padx=30)
-        self.node_label = tk.Label(header, text=platform.node(), bg="#1e293b", fg="#94a3b8", font=("Consolas", 10))
-        self.node_label.pack(side=tk.RIGHT, padx=30)
+        
+        # System Clock and Node ID
+        info_pane = tk.Frame(header, bg="#1e293b")
+        info_pane.pack(side=tk.RIGHT, padx=30)
+        
+        self.clock_label = tk.Label(info_pane, text="00:00:00", bg="#1e293b", fg="#4ade80", font=("Consolas", 14, "bold"))
+        self.clock_label.pack()
+        self.node_label = tk.Label(info_pane, text=platform.node(), bg="#1e293b", fg="#94a3b8", font=("Consolas", 9))
+        self.node_label.pack()
 
         main_scroll = tk.Frame(root, bg="#0f172a")
         main_scroll.pack(fill=tk.BOTH, expand=True, padx=30, pady=20)
 
+        # SYSTEM SECTION
         self.create_section(main_scroll, "SYSTEM IDENTITY")
         sys_inner = tk.Frame(main_scroll, bg="#1e293b", padx=15, pady=15)
         sys_inner.pack(fill=tk.X, pady=(0, 20))
         self.name_entry = self.create_input(sys_inner, "Display Name:", config_data["display_name"], 0)
         self.loc_entry = self.create_input(sys_inner, "Location:", config_data["location"], 1)
 
+        # ROUTING SECTION
         self.create_section(main_scroll, "HARDWARE ROUTING")
         hw_inner = tk.Frame(main_scroll, bg="#1e293b", padx=15, pady=15)
         hw_inner.pack(fill=tk.X, pady=(0, 20))
@@ -362,23 +445,48 @@ class MonitorGUI:
         
         self.update_midi_devices()
         self.serial_entry = self.create_input(hw_inner, "Serial Port:", config_data["serial_port"], 1)
+
+        # AUTOMATION SECTION (Updated with intuitive time pickers)
+        self.create_section(main_scroll, "AUTOMATION SCHEDULES")
+        sch_inner = tk.Frame(main_scroll, bg="#1e293b", padx=15, pady=15)
+        sch_inner.pack(fill=tk.X, pady=(0, 20))
+        
+        self.launch_h, self.launch_m = self.create_time_picker(sch_inner, "Autolaunch Time:", config_data.get("autolaunch_time", "09:00"), 0)
+        self.shutdown_h, self.shutdown_m = self.create_time_picker(sch_inner, "Shutdown Time:", config_data.get("shutdown_time", "22:00"), 1)
         
         tk.Button(main_scroll, text="SAVE SYSTEM SETTINGS", command=self.save_all_config, 
-                  bg="#3b82f6", fg="white", font=("Segoe UI", 10, "bold"), borderwidth=0, pady=8).pack(fill=tk.X, pady=(0, 30))
+                  bg="#3b82f6", fg="white", font=("Segoe UI", 10, "bold"), borderwidth=0, pady=8).pack(fill=tk.X, pady=(0, 20))
 
+        # Bottom section: Apps and Presets
         cols = tk.Frame(main_scroll, bg="#0f172a")
         cols.pack(fill=tk.BOTH, expand=True)
 
+        # APP WATCHER (Updated with Checkboxes)
         left_col = tk.Frame(cols, bg="#0f172a")
         left_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 10))
-        self.create_section(left_col, "APP WATCHER")
-        self.app_list = tk.Listbox(left_col, bg="#1e293b", fg="white", borderwidth=0, highlightthickness=0, font=("Segoe UI", 9))
-        self.app_list.pack(fill=tk.BOTH, expand=True)
+        self.create_section(left_col, "APP WATCHER & AUTOLAUNCH")
+        
+        # Container for scrollable checkbuttons
+        app_list_container = tk.Frame(left_col, bg="#1e293b")
+        app_list_container.pack(fill=tk.BOTH, expand=True)
+        
+        self.app_canvas = tk.Canvas(app_list_container, bg="#1e293b", borderwidth=0, highlightthickness=0)
+        self.app_scrollbar = ttk.Scrollbar(app_list_container, orient="vertical", command=self.app_canvas.yview)
+        self.app_scroll_frame = tk.Frame(self.app_canvas, bg="#1e293b")
+        
+        self.app_scroll_frame.bind("<Configure>", lambda e: self.app_canvas.configure(scrollregion=self.app_canvas.bbox("all")))
+        self.app_canvas.create_window((0, 0), window=self.app_scroll_frame, anchor="nw")
+        self.app_canvas.configure(yscrollcommand=self.app_scrollbar.set)
+        
+        self.app_canvas.pack(side="left", fill="both", expand=True)
+        self.app_scrollbar.pack(side="right", fill="y")
+
         app_btns = tk.Frame(left_col, bg="#0f172a")
         app_btns.pack(fill=tk.X, pady=10)
-        tk.Button(app_btns, text="+ Add", command=self.add_app, bg="#1e293b", fg="#60a5fa", borderwidth=0, font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=2)
-        tk.Button(app_btns, text="- Remove", command=self.remove_app, bg="#1e293b", fg="#f87171", borderwidth=0, font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=2)
+        tk.Button(app_btns, text="+ Add App", command=self.add_app, bg="#1e293b", fg="#60a5fa", borderwidth=0, font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=2)
+        tk.Button(app_btns, text="Clear Selected", command=self.remove_apps, bg="#1e293b", fg="#f87171", borderwidth=0, font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=2)
 
+        # PRESETS
         right_col = tk.Frame(cols, bg="#0f172a")
         right_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(10, 0))
         self.create_section(right_col, "REMOTE PRESETS")
@@ -397,8 +505,13 @@ class MonitorGUI:
         self.status_label = tk.Label(footer, text=f"API ACTIVE: PORT 5001  |  {hw_status}", bg="#0f172a", fg="#4ade80", font=("Consolas", 8), pady=10)
         self.status_label.pack()
 
-        self.refresh_list()
+        self.tick() # Start clock
+        self.refresh_app_list()
         self.refresh_presets()
+
+    def tick(self):
+        self.clock_label.config(text=datetime.now().strftime("%H:%M:%S"))
+        self.root.after(1000, self.tick)
 
     def create_icon_image(self, width, height):
         image = Image.new('RGBA', (width, height), (0, 0, 0, 0))
@@ -457,27 +570,75 @@ class MonitorGUI:
     def create_input(self, parent, label, value, row):
         tk.Label(parent, text=label, bg="#1e293b", fg="#94a3b8", font=("Segoe UI", 9, "bold")).grid(row=row, column=0, sticky="w", pady=5)
         e = tk.Entry(parent, bg="#0f172a", fg="white", borderwidth=0, highlightthickness=1, highlightbackground="#334155", highlightcolor="#3b82f6", insertbackground="white", font=("Segoe UI", 10))
-        e.insert(0, value)
+        e.insert(0, str(value))
         e.grid(row=row, column=1, sticky="ew", padx=10, pady=5)
         parent.columnconfigure(1, weight=1)
         return e
+
+    def create_time_picker(self, parent, label, current_time, row):
+        tk.Label(parent, text=label, bg="#1e293b", fg="#94a3b8", font=("Segoe UI", 9, "bold")).grid(row=row, column=0, sticky="w", pady=5)
+        
+        f = tk.Frame(parent, bg="#1e293b")
+        f.grid(row=row, column=1, sticky="w", padx=10, pady=5)
+        
+        try:
+            h, m = current_time.split(':')
+        except:
+            h, m = "00", "00"
+            
+        h_spin = ttk.Spinbox(f, from_=0, to=23, format="%02.0f", width=4, font=("Segoe UI", 10))
+        h_spin.set(h)
+        h_spin.pack(side=tk.LEFT)
+        
+        tk.Label(f, text=":", bg="#1e293b", fg="white").pack(side=tk.LEFT, padx=2)
+        
+        m_spin = ttk.Spinbox(f, from_=0, to=59, format="%02.0f", width=4, font=("Segoe UI", 10))
+        m_spin.set(m)
+        m_spin.pack(side=tk.LEFT)
+        
+        return h_spin, m_spin
 
     def save_all_config(self):
         config_data["display_name"] = self.name_entry.get()
         config_data["location"] = self.loc_entry.get()
         config_data["serial_port"] = self.serial_entry.get()
+        
+        # Pull time from spinboxes
+        config_data["autolaunch_time"] = f"{self.launch_h.get()}:{self.launch_m.get()}"
+        config_data["shutdown_time"] = f"{self.shutdown_h.get()}:{self.shutdown_m.get()}"
+        
         midi_val = self.midi_cb.get()
         config_data["midi_device_index"] = int(midi_val.split(":")[0]) if ":" in midi_val else -1
+        
         save_config(config_data)
-        self.refresh_list()
-        messagebox.showinfo("Config Saved", "Settings updated successfully.")
+        messagebox.showinfo("Config Saved", "Settings and Automation schedules updated.")
 
-    def refresh_list(self):
-        self.app_list.delete(0, tk.END)
-        for p in config_data["watched_apps"]:
-            is_admin = check_requires_admin(p)
-            tag = " [ADMIN]" if is_admin else ""
-            self.app_list.insert(tk.END, f" {os.path.basename(p)}{tag}")
+    def refresh_app_list(self):
+        for widget in self.app_scroll_frame.winfo_children():
+            widget.destroy()
+        
+        self.app_vars = []
+        for i, app_entry in enumerate(config_data["watched_apps"]):
+            path = app_entry["path"]
+            auto = app_entry.get("autolaunch", True)
+            name = os.path.basename(path)
+            
+            f = tk.Frame(self.app_scroll_frame, bg="#1e293b")
+            f.pack(fill=tk.X, padx=5, pady=2)
+            
+            var = tk.BooleanVar(value=auto)
+            cb = tk.Checkbutton(f, text=f"{name}", variable=var, 
+                                command=lambda idx=i, v=var: self.toggle_autolaunch(idx, v.get()),
+                                bg="#1e293b", fg="white", selectcolor="#0f172a", 
+                                activebackground="#1e293b", activeforeground="#3b82f6")
+            cb.pack(side=tk.LEFT)
+            
+            if check_requires_admin(path):
+                tk.Label(f, text=" [ADMIN]", bg="#1e293b", fg="#f87171", font=("Segoe UI", 7)).pack(side=tk.LEFT)
+
+    def toggle_autolaunch(self, index, value):
+        config_data["watched_apps"][index]["autolaunch"] = value
+        save_config(config_data)
 
     def refresh_presets(self):
         self.preset_list.delete(0, tk.END)
@@ -485,12 +646,22 @@ class MonitorGUI:
 
     def add_app(self):
         f = filedialog.askopenfilename(title="Select Application Executable", filetypes=[("Executables", "*.exe")])
-        if f and f not in config_data["watched_apps"]:
-            config_data["watched_apps"].append(f); save_config(config_data); self.refresh_list()
+        if f:
+            already_exists = any(a["path"] == f for a in config_data["watched_apps"])
+            if not already_exists:
+                config_data["watched_apps"].append({"path": f, "autolaunch": True})
+                save_config(config_data)
+                self.refresh_app_list()
 
-    def remove_app(self):
-        s = self.app_list.curselection()
-        if s: config_data["watched_apps"].pop(s[0]); save_config(config_data); self.refresh_list()
+    def remove_apps(self):
+        # Simply clearing for now or we could add individual delete buttons. 
+        # For simplicity, let's keep the removal flow intuitive: 
+        # Add a simple modal or right click. Let's add a "Remove" button per app in next iteration.
+        # For now, let's allow removing all un-checked ones as a shortcut or reset.
+        if messagebox.askyesno("Confirm", "Clear all apps from the watcher?"):
+            config_data["watched_apps"] = []
+            save_config(config_data)
+            self.refresh_app_list()
 
     def delete_preset(self):
         s = self.preset_list.curselection()
@@ -531,7 +702,13 @@ def run_flask():
     app.run(host='0.0.0.0', port=5001, debug=False, use_reloader=False)
 
 if __name__ == '__main__':
+    # Start the Flask API thread
     threading.Thread(target=run_flask, daemon=True).start()
+    
+    # Start the Background Scheduler thread
+    threading.Thread(target=scheduler_loop, daemon=True).start()
+    
+    # Run the GUI
     root = tk.Tk()
     gui = MonitorGUI(root)
     root.mainloop()
