@@ -1,0 +1,2 @@
+192.168.1.76 - - [15/May/2026 00:38:46] "POST /action/control/midi HTTP/1.1" 500 - -> Sometimes the midi fails
+CPU usage is not being displayed in the maindashboard 
