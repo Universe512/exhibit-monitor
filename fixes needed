@@ -1,6 +1,3 @@
-192.168.1.76 - - [15/May/2026 00:38:46] "POST /action/control/midi HTTP/1.1" 500 - -> Sometimes the midi fails
-CPU usage is not being displayed in the maindashboard 
-
 //
 Exception in Tkinter callback
 Traceback (most recent call last):
@@ -29,3 +26,13 @@ Traceback (most recent call last):
     raise TypeError(f'Object of type {o.__class__.__name__} '
 TypeError: Object of type BooleanVar is not JSON serializable
 // -> Getting this error when updating the time in the pc app
+
+When I add presets in the pc_app they do not show up until we go in and out of the tab
+
+we Should be able to multiselect presets like shift click or control click
+
+The app watcher section checkbox for autostart is not labeled and has a styling issue
+
+The fleet config json should be saving all the information of the exhibits like names and settings 
+
+The local ip is showing 0.0.0.0 on the pc_app
