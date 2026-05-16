@@ -36,3 +36,5 @@ The app watcher section checkbox for autostart is not labeled and has a styling 
 The fleet config json should be saving all the information of the exhibits like names and settings 
 
 The local ip is showing 0.0.0.0 on the pc_app
+
+The core temp always just shows up as 45c

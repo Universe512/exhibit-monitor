@@ -1,3 +1,27 @@
+<div align="center">
+  <h2 style="color: #ff4d4f;">⚠️ Current State: Broken</h2>
+  <p><strong>Please read fixes needed before install.</strong></p>
+</div>
+
+---
+
+<div style="padding: 15px; border-left: 5px solid #ff4d4f; background-color: #ffe6e6; color: #cc0000; margin-bottom: 20px; border-radius: 4px;">
+  <strong>⚠️ CAUTION:</strong> The current build is unstable. Attempting to install may result in runtime errors or undesired behavior. A patch is currently in the works.
+</div>
+
+### 🛠️ Required Fixes
+*When I add presets in the pc_app they do not show up until we go in and out of the tab
+
+we Should be able to multiselect presets like shift click or control click
+
+The app watcher section checkbox for autostart is not labeled and has a styling issue
+
+The fleet config json should be saving all the information of the exhibits like names and settings 
+
+The local ip is showing 0.0.0.0 on the pc_app
+
+The core temp always just shows up as 45c*
+
 # Museum Monitor: Operator & Deployment Guide
 
 This guide provides technical instructions for server operators to deploy, manage, and persist the **Museum Monitor** fleet infrastructure using a central Linux server and Windows exhibit PCs.
