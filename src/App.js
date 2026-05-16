@@ -164,22 +164,30 @@ export default function App() {
     }
   };
 
-  const syncToMaster = async () => {
+  // Now pushes both the IP list AND the selected refreshRate (in seconds) to the Master!
+  const syncToMaster = async (ipsToSync = adoptedIps) => {
     if (!masterServiceIp) return;
     try {
       const response = await fetch(`http://${masterServiceIp}:5002/sync`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ips: adoptedIps })
+        body: JSON.stringify({ 
+          ips: ipsToSync,
+          refreshRate: refreshRate / 1000 // Convert ms to seconds for the Python backend
+        })
       });
       if (response.ok) {
         setMasterLinkStatus('online');
         setLastMasterSync(new Date().toLocaleTimeString());
-        showToast("Master Service Synced", "success");
+        if (ipsToSync === adoptedIps) {
+          showToast("Master Service Synced", "success");
+        }
       }
     } catch (err) {
       setMasterLinkStatus('offline');
-      showToast("Master Service Connection Failed", "danger");
+      if (ipsToSync === adoptedIps) {
+        showToast("Master Service Connection Failed", "danger");
+      }
     }
   };
 
@@ -191,8 +199,9 @@ export default function App() {
 
   const fetchScreenshot = useCallback(async (ip, silent = false) => {
     if (!silent) setLoadingScreenshot(true);
+    if (!masterServiceIp) return;
     try {
-      const response = await fetch(`http://${ip}:${AGENT_PORT}/action/screenshot`);
+      const response = await fetch(`http://${masterServiceIp}:5002/proxy/action/screenshot?target_ip=${ip}`);
       const data = await response.json();
       if (data.image) {
         setScreenshot(`data:image/jpeg;base64,${data.image}`);
@@ -202,92 +211,82 @@ export default function App() {
     } finally {
       if (!silent) setLoadingScreenshot(false);
     }
-  }, []);
+  }, [masterServiceIp]);
 
   const pollAgents = useCallback(async () => {
-    const currentStations = stationsRef.current;
-    if (currentStations.length === 0) return;
+    if (!masterServiceIp) return; 
 
-    const results = await Promise.all(currentStations.map(async (station) => {
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 1500);
-        const response = await fetch(`http://${station.ip}:${AGENT_PORT}/health`, { 
-          signal: controller.signal 
+    try {
+      const response = await fetch(`http://${masterServiceIp}:5002/state`);
+      if (!response.ok) throw new Error("Master not responding");
+      
+      const masterData = await response.json();
+      const fleetState = masterData.state;
+
+      const newVitals = {};
+      const newApps = {};
+      const newPresets = {};
+      const updatedStations = [];
+
+      Object.keys(fleetState).forEach(ip => {
+        const stationData = fleetState[ip];
+        
+        updatedStations.push({
+          id: ip,
+          ip: ip,
+          status: stationData.status,
+          name: stationData.name || ip,
+          location: stationData.location || 'Unknown'
         });
-        clearTimeout(timeoutId);
 
-        if (response.ok) {
-          const data = await response.json();
-          return {
-            ip: station.ip,
-            status: 'online',
-            name: data.name || station.id,
-            location: data.location || 'Unknown',
-            vitals: data.vitals,
-            apps: data.apps,
-            presets: data.presets || []
-          };
-        }
-      } catch (err) {}
-      return { ip: station.ip, status: 'offline' };
-    }));
+        if (stationData.status === 'online') {
+          newVitals[ip] = stationData.vitals;
+          newApps[ip] = stationData.apps;
+          newPresets[ip] = stationData.presets || [];
 
-    setStations(prev => {
-      const next = prev.map(s => {
-        const update = results.find(r => r.ip === s.ip);
-        return update ? { ...s, ...update } : s;
-      });
-      stationsRef.current = next;
-      return next;
-    });
-
-    const newVitals = {};
-    const newApps = {};
-    const newPresets = {};
-    
-    results.forEach(r => {
-      if (r.status === 'online') {
-        newVitals[r.ip] = r.vitals;
-        newApps[r.ip] = r.apps;
-        newPresets[r.ip] = r.presets;
-
-        if (restartingApps[r.ip]) {
-          const stationRestarts = restartingApps[r.ip];
-          let updated = false;
-          const nextRestarts = { ...stationRestarts };
-          r.apps.forEach(app => {
-            if (app.status === 'running' && nextRestarts[app.name]?.status === 'restarting') {
-              delete nextRestarts[app.name];
-              updated = true;
+          if (restartingApps[ip]) {
+            const stationRestarts = restartingApps[ip];
+            let updated = false;
+            const nextRestarts = { ...stationRestarts };
+            if (stationData.apps) {
+              stationData.apps.forEach(app => {
+                if (app.status === 'running' && nextRestarts[app.name]?.status === 'restarting') {
+                  delete nextRestarts[app.name];
+                  updated = true;
+                }
+              });
             }
-          });
-          if (updated) {
-            setRestartingApps(prev => {
-              const cleaned = { ...prev, [r.ip]: nextRestarts };
-              if (Object.keys(nextRestarts).length === 0) delete cleaned[r.ip];
-              return cleaned;
-            });
+            if (updated) {
+              setRestartingApps(prev => {
+                const cleaned = { ...prev, [ip]: nextRestarts };
+                if (Object.keys(nextRestarts).length === 0) delete cleaned[ip];
+                return cleaned;
+              });
+            }
           }
         }
-      }
-    });
+      });
 
-    setVitals(prev => ({ ...prev, ...newVitals }));
-    setApps(prev => ({ ...prev, ...newApps }));
-    setPresets(prev => ({ ...prev, ...newPresets }));
-    
-    setLastUpdate(new Date().toLocaleTimeString());
-    setIsPulsing(true);
-    setTimeout(() => setIsPulsing(false), 800); 
+      setStations(updatedStations);
+      setVitals(newVitals);
+      setApps(newApps);
+      setPresets(newPresets);
+      
+      setLastUpdate(new Date().toLocaleTimeString());
+      setIsPulsing(true);
+      setTimeout(() => setIsPulsing(false), 800); 
 
-    if (configOptions.autoScreenshot && selectedStationId) {
-      const target = results.find(r => r.ip === selectedStationId && r.status === 'online');
-      if (target) {
-        fetchScreenshot(target.ip, true);
+      if (configOptions.autoScreenshot && selectedStationId) {
+        const target = updatedStations.find(r => r.ip === selectedStationId && r.status === 'online');
+        if (target) {
+          fetchScreenshot(target.ip, true);
+        }
       }
+    } catch (err) {
+      console.error("Failed to poll master state", err);
+      setMasterLinkStatus('offline');
     }
-  }, [restartingApps, configOptions.autoScreenshot, selectedStationId, fetchScreenshot]);
+  }, [masterServiceIp, restartingApps, configOptions.autoScreenshot, selectedStationId, fetchScreenshot]);
 
   useEffect(() => {
     const hasActiveRestarts = Object.values(restartingApps).some(station => 
@@ -362,50 +361,90 @@ export default function App() {
   };
 
   const scanForNewExhibits = async (isDeepScan = false) => {
-    if (isScanning) return;
+    if (isScanning || !masterServiceIp) return;
     setIsScanning(true);
-    const discovered = [];
-    const limit = isDeepScan ? 100 : 30;
-    const range = Array.from({ length: limit - 1 }, (_, i) => i + 2); 
-    const batchSize = 10;
-    for (let i = 0; i < range.length; i += batchSize) {
-      const batch = range.slice(i, i + batchSize);
-      await Promise.all(batch.map(async (num) => {
-        const testIp = `${scanSubnet}.${num}`;
-        if (adoptedIps.includes(testIp)) return;
+    setDiscoveredStations([]); 
+    
+    let cleanSubnet = scanSubnet.replace(/\.+$/, ''); 
+    const parts = cleanSubnet.split('.');
+
+    let ipsToScan = [];
+
+    if (isDeepScan && parts.length >= 2) {
+      const base = `${parts[0]}.${parts[1]}`;
+      let thirdOctets = [0, 1, 2, 5, 10];
+      if (parts[2] && !isNaN(parts[2])) {
+        thirdOctets.push(parseInt(parts[2]));
+      }
+      thirdOctets = [...new Set(thirdOctets)]; 
+      
+      thirdOctets.forEach(third => {
+        for (let i = 2; i <= 254; i++) ipsToScan.push(`${base}.${third}.${i}`);
+      });
+    } else {
+      if (parts.length === 2) cleanSubnet = `${cleanSubnet}.1`; 
+      for (let i = 2; i <= 254; i++) {
+        ipsToScan.push(`${cleanSubnet}.${i}`);
+      }
+    }
+
+    ipsToScan = ipsToScan.filter(ip => !adoptedIps.includes(ip));
+
+    const batchSize = 5; 
+    let foundCount = 0;
+
+    for (let i = 0; i < ipsToScan.length; i += batchSize) {
+      const batch = ipsToScan.slice(i, i + batchSize);
+      
+      await Promise.all(batch.map(async (testIp) => {
         try {
           const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 1000);
-          const response = await fetch(`http://${testIp}:${AGENT_PORT}/health`, { signal: controller.signal });
+          const timeoutId = setTimeout(() => controller.abort(), 6500); 
+          const response = await fetch(`http://${masterServiceIp}:5002/proxy/health?target_ip=${testIp}`, { signal: controller.signal });
           clearTimeout(timeoutId);
+          
           if (response.ok) {
             const data = await response.json();
-            discovered.push({ ip: testIp, name: data.name, location: data.location });
+            foundCount++;
+            setDiscoveredStations(prev => {
+              const combined = [...prev, { ip: testIp, name: data.name || testIp, location: data.location || 'Unknown' }];
+              return combined.filter((v, idx, a) => a.findIndex(t => t.ip === v.ip) === idx);
+            });
           }
         } catch (e) {}
       }));
     }
-    setDiscoveredStations(prev => {
-      const combined = [...prev, ...discovered];
-      return combined.filter((v, i, a) => a.findIndex(t => t.ip === v.ip) === i);
-    });
+    
     setIsScanning(false);
+    showToast(
+      foundCount > 0 ? `Scan Complete: Found ${foundCount} new exhibits.` : `Scan Complete: No new exhibits found.`, 
+      foundCount > 0 ? "success" : "info"
+    );
   };
 
   useEffect(() => {
-    scanForNewExhibits(false);
-    const interval = setInterval(() => scanForNewExhibits(false), 60000);
+    const interval = setInterval(() => {
+      if(!isScanning) scanForNewExhibits(false);
+    }, 60000);
     return () => clearInterval(interval);
-  }, [adoptedIps, scanSubnet]);
+  }, [adoptedIps, scanSubnet, masterServiceIp]); 
 
   const adoptStation = (ip) => {
-    setAdoptedIps(prev => prev.includes(ip) ? prev : [...prev, ip]);
+    setAdoptedIps(prev => {
+      const next = prev.includes(ip) ? prev : [...prev, ip];
+      syncToMaster(next); 
+      return next;
+    });
     setDiscoveredStations(prev => prev.filter(s => s.ip !== ip));
     showToast(`Station ${ip} Adopted`, "success");
   };
 
   const removeStation = (ip) => {
-    setAdoptedIps(prev => prev.filter(item => item !== ip));
+    setAdoptedIps(prev => {
+      const next = prev.filter(item => item !== ip);
+      syncToMaster(next); 
+      return next;
+    });
     if (selectedStationId === ip) setSelectedStationId(null);
     showToast(`Station ${ip} Removed`, "info");
   };
@@ -423,7 +462,7 @@ export default function App() {
 
   const handleRemoteAction = async (stationId, action, payload = {}) => {
     const targetStation = stations.find(s => s.id === stationId);
-    if (!targetStation) return;
+    if (!targetStation || !masterServiceIp) return;
     setIsRefreshing(true);
     
     if (action === 'restart-app') {
@@ -438,16 +477,17 @@ export default function App() {
 
     let endpoint;
     if (['midi', 'osc', 'serial', 'preset'].includes(action)) {
-      endpoint = `control/${action}`;
+      endpoint = `action/control/${action}`;
     } else {
-      endpoint = action === 'reboot' ? 'reboot' : 'restart-app';
+      endpoint = action === 'reboot' ? 'action/reboot' : 'action/restart-app';
     }
     
     try {
-      await fetch(`http://${targetStation.ip}:${AGENT_PORT}/action/${endpoint}`, {
+      const proxyPayload = { ...payload, target_ip: targetStation.ip };
+      await fetch(`http://${masterServiceIp}:5002/proxy/${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(proxyPayload)
       });
       showToast(`${action.toUpperCase()} Sent to ${targetStation.name}`, "info");
       if (action === 'reboot' || action === 'restart-app') {
@@ -578,7 +618,6 @@ export default function App() {
         </div>
       </header>
 
-      {}
       {discoveredStations.length > 0 && (
         <div className="mb-6 animate-in slide-in-from-top duration-500">
           <div className="bg-blue-600/20 border border-blue-500/50 rounded-xl p-4 flex flex-col md:flex-row items-center justify-between gap-4">
@@ -758,7 +797,6 @@ export default function App() {
         </div>
       )}
 
-      {}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         <div className="lg:col-span-4 space-y-4 h-[calc(100vh-250px)] overflow-y-auto pr-2 custom-scrollbar">
           {filteredStations.map(station => (
@@ -837,7 +875,6 @@ export default function App() {
                 </div>
               </div>
 
-              {}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <VitalMeter icon={<Cpu />} label="CPU" value={vitals[selectedStation.id]?.cpu} color="blue" smoothing={configOptions.smoothing} />
                 <VitalMeter icon={<Activity />} label="RAM" value={vitals[selectedStation.id]?.ram} color="emerald" smoothing={configOptions.smoothing} />
@@ -924,7 +961,6 @@ export default function App() {
         </div>
       </div>
 
-      {}
       {showManualControl && selectedStation && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl shadow-2xl animate-in zoom-in duration-200 overflow-hidden">
@@ -1044,7 +1080,6 @@ export default function App() {
         </div>
       )}
 
-      {}
       {screenshot && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/90 backdrop-blur-md animate-in fade-in duration-300">
           <div className="relative max-w-5xl w-full bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl animate-in zoom-in duration-300">
